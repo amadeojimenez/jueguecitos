@@ -94,8 +94,12 @@ let objects;          // [{ x, y, type, size }]
 let roadOffset;
 let scoreTimer, spawnTimer, spawnInterval, diffTimer;
 
-const CAR_Y_FRAC      = 0.78;
-const LANE_LERP       = 0.14;
+const CAR_Y_FRAC          = 0.78;
+const LANE_LERP           = 0.14;
+// 38 % coins, 62 % obstacles — tuned for a fun challenge-vs-reward balance
+const COIN_SPAWN_PROBABILITY = 0.38;
+// Hitbox is smaller than the visual to feel fair when near-missing
+const COLLISION_SCALE     = 0.65;
 
 function initGame() {
   const r    = roadMetrics();
@@ -127,7 +131,7 @@ function spawnObject() {
   const r    = roadMetrics();
   const lane = Math.random() < 0.5 ? 0 : 1;
   const x    = lane === 0 ? r.lane0 : r.lane1;
-  const type = Math.random() < 0.38 ? 'collect' : 'obstacle';
+  const type = Math.random() < COIN_SPAWN_PROBABILITY ? 'collect' : 'obstacle';
   const size = r.laneW * 0.32;
   objects.push({ x, y: -size * 1.2, type, size });
 }
@@ -135,11 +139,10 @@ function spawnObject() {
 // ─── Collision ───────────────────────────────────────────────────────────────
 function collides(obj) {
   const { carW, carH, carY } = carDims();
-  const scale = 0.65;                      // forgiving hitbox
-  const cL = carX  - carW * scale / 2;
-  const cR = carX  + carW * scale / 2;
-  const cT = carY  - carH * scale / 2;
-  const cB = carY  + carH * scale / 2;
+  const cL = carX  - carW * COLLISION_SCALE / 2;
+  const cR = carX  + carW * COLLISION_SCALE / 2;
+  const cT = carY  - carH * COLLISION_SCALE / 2;
+  const cB = carY  + carH * COLLISION_SCALE / 2;
   const oS = obj.size * 0.85;
   return cL < obj.x + oS && cR > obj.x - oS &&
          cT < obj.y + oS && cB > obj.y - oS;
@@ -147,7 +150,6 @@ function collides(obj) {
 
 // ─── Update ──────────────────────────────────────────────────────────────────
 function update() {
-  frame++;
   carX += (targetCarX - carX) * LANE_LERP;
 
   // Scroll road
@@ -453,11 +455,11 @@ function drawGameOver(r) {
   ctx.fillStyle = '#ffffff';
   ctx.fillText(`Score: ${score}`, cx, r.H * 0.48);
 
-  if (score >= highScore && highScore > 0) {
+  if (score >= highScore) {
     ctx.font      = `bold ${fSm * 1.1}px Arial, sans-serif`;
     ctx.fillStyle = '#ffd700';
     ctx.fillText('🏆 NEW HIGH SCORE!', cx, r.H * 0.57);
-  } else if (highScore > 0) {
+  } else {
     ctx.font      = `${fSm}px Arial, sans-serif`;
     ctx.fillStyle = '#aaaaff';
     ctx.fillText(`Best: ${highScore}`, cx, r.H * 0.57);
