@@ -110,7 +110,7 @@ const COLOR_UNLOCK_SCORE = 10;
 const COLOR_ORDER        = ['blue', 'white', 'purple'];
 const PORTAL_MIN_INTERVAL = 20;
 const PORTAL_MAX_INTERVAL = 120;
-const SWIPE_UP_MIN_FRAC  = 0.055;
+const COLOR_SWIPE_MIN_FRAC = 0.055;
 // Hitbox is smaller than the visual to feel fair when near-missing
 const COLLISION_SCALE     = 0.65;
 
@@ -173,10 +173,11 @@ function currentTheme() {
   return WORLD_THEMES[activeWorld] || WORLD_THEMES.blue;
 }
 
-function cycleCarColor() {
+function cycleCarColor(direction = 1) {
   if (!colorFeatureUnlocked()) return false;
   const idx = COLOR_ORDER.indexOf(selectedCarColor);
-  selectedCarColor = COLOR_ORDER[(idx + 1) % COLOR_ORDER.length];
+  const nextIdx = (idx + direction + COLOR_ORDER.length) % COLOR_ORDER.length;
+  selectedCarColor = COLOR_ORDER[nextIdx];
   return true;
 }
 
@@ -458,43 +459,25 @@ function drawObstacle(x, y, size) {
 }
 
 function drawCoin(x, y, size) {
-  // Gold circle with star — collectible
+  // Collectible uses the obstacle style, but as a circle instead of a diamond.
   const theme = currentTheme();
   ctx.save();
   ctx.translate(x, y);
+  const s = size * 0.72;
 
-  // Outer glow ring
-  const grad = ctx.createRadialGradient(0, 0, size * 0.3, 0, 0, size * 0.75);
-  grad.addColorStop(0,   theme.coin0);
-  grad.addColorStop(0.7, theme.coin1);
-  grad.addColorStop(1,   'rgba(255,255,255,0)');
-  ctx.fillStyle = grad;
+  // Outer circular body
+  ctx.fillStyle   = theme.obstacle;
+  ctx.strokeStyle = theme.obstacleStroke;
+  ctx.lineWidth   = 2.5;
   ctx.beginPath();
-  ctx.arc(0, 0, size * 0.75, 0, Math.PI * 2);
-  ctx.fill();
-
-  // Main coin
-  ctx.fillStyle   = theme.coin0;
-  ctx.strokeStyle = theme.coinStroke;
-  ctx.lineWidth   = 2;
-  ctx.beginPath();
-  ctx.arc(0, 0, size * 0.60, 0, Math.PI * 2);
+  ctx.arc(0, 0, s, 0, Math.PI * 2);
   ctx.fill();
   ctx.stroke();
 
-  // Star inside
-  const pts   = 5;
-  const outerR = size * 0.33;
-  const innerR = size * 0.14;
-  ctx.fillStyle = theme.coinStar;
+  // Inner circular highlight
+  ctx.fillStyle = theme.obstacleInner;
   ctx.beginPath();
-  for (let i = 0; i < pts * 2; i++) {
-    const ang = (i * Math.PI) / pts - Math.PI / 2;
-    const r2  = i % 2 === 0 ? outerR : innerR;
-    if (i === 0) ctx.moveTo(r2 * Math.cos(ang), r2 * Math.sin(ang));
-    else         ctx.lineTo(r2 * Math.cos(ang), r2 * Math.sin(ang));
-  }
-  ctx.closePath();
+  ctx.arc(0, 0, s * 0.45, 0, Math.PI * 2);
   ctx.fill();
 
   ctx.restore();
@@ -790,11 +773,12 @@ function canvasPoint(clientX, clientY) {
   };
 }
 
-function isSwipeUp(start, end) {
+function colorSwipeDirection(start, end) {
   const dx = end.x - start.x;
   const dy = end.y - start.y;
-  const minDist = Math.max(34, canvas.height * SWIPE_UP_MIN_FRAC);
-  return dy <= -minDist && Math.abs(dy) > Math.abs(dx) * 1.25;
+  const minDist = Math.max(34, canvas.height * COLOR_SWIPE_MIN_FRAC);
+  if (Math.abs(dy) < minDist || Math.abs(dy) <= Math.abs(dx) * 1.25) return 0;
+  return dy < 0 ? 1 : -1;
 }
 
 function handlePointerPress(point) {
@@ -815,8 +799,9 @@ function handleTouchEnd(start, end) {
   }
 
   if (gameState === 'playing') {
-    if (isSwipeUp(start, end) && colorFeatureUnlocked()) {
-      cycleCarColor();
+    const swipeDirection = colorSwipeDirection(start, end);
+    if (swipeDirection !== 0 && colorFeatureUnlocked()) {
+      cycleCarColor(swipeDirection);
       return;
     }
     moveByScreenSide(end);
