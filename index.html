@@ -90,6 +90,7 @@ let speed;
 let playerLane;       // 0 = left, 1 = right
 let carX, targetCarX;
 let objects;          // [{ x, y, type, size, lane, color }]
+let effects;          // [{ x, y, type, size, color, age, duration }]
 let roadOffset;
 let scoreTimer, spawnTimer, spawnInterval, diffTimer;
 let portalTimer, portalInterval;
@@ -119,6 +120,8 @@ const PORTAL_MAX_INTERVAL = 120;
 const PORTAL_SCORE_BONUS = 50;
 const NIGHT_MIN_INTERVAL = 900;
 const NIGHT_MAX_INTERVAL = 1800;
+const DEV_NIGHT_MIN_INTERVAL = 120;
+const DEV_NIGHT_MAX_INTERVAL = 240;
 const NIGHT_WARNING_FRAMES = 180;
 const NIGHT_DURATION_FRAMES = 300;
 const NIGHT_BLINK_FRAMES = 24;
@@ -159,6 +162,7 @@ function initGame() {
   carX       = r.lane0;
   targetCarX = r.lane0;
   objects    = [];
+  effects    = [];
   score      = 0;
   frame      = 0;
   speed      = 4;
@@ -184,7 +188,9 @@ function randomPortalInterval() {
 }
 
 function randomNightInterval() {
-  return NIGHT_MIN_INTERVAL + Math.floor(Math.random() * (NIGHT_MAX_INTERVAL - NIGHT_MIN_INTERVAL + 1));
+  const minInterval = devMode ? DEV_NIGHT_MIN_INTERVAL : NIGHT_MIN_INTERVAL;
+  const maxInterval = devMode ? DEV_NIGHT_MAX_INTERVAL : NIGHT_MAX_INTERVAL;
+  return minInterval + Math.floor(Math.random() * (maxInterval - minInterval + 1));
 }
 
 function colorFeatureUnlocked() {
@@ -206,6 +212,18 @@ function cycleCarColor(direction = 1) {
 function endGame() {
   if (score > highScore) highScore = score;
   gameState = 'gameover';
+}
+
+function collapsePortal(portal) {
+  effects.push({
+    x: portal.x,
+    y: portal.y,
+    type: 'portalCollapse',
+    size: portal.size,
+    color: portal.color,
+    age: 0,
+    duration: 28
+  });
 }
 
 // ─── Car Dimensions (top-down view) ─────────────────────────────────────────
@@ -316,6 +334,8 @@ function update() {
     portalInterval = randomPortalInterval();
   }
 
+  updateEffects();
+
   // Move & check objects
   for (let i = objects.length - 1; i >= 0; i--) {
     objects[i].y += speed;
@@ -333,8 +353,9 @@ function update() {
         objects.splice(i, 1);
       } else if (objects[i].type === 'portal') {
         if (selectedCarColor !== objects[i].color) {
-          endGame();
-          return;
+          collapsePortal(objects[i]);
+          objects.splice(i, 1);
+          continue;
         }
         activeWorld = objects[i].color;
         score += PORTAL_SCORE_BONUS;
@@ -342,6 +363,13 @@ function update() {
         objects.splice(i, 1);
       }
     }
+  }
+}
+
+function updateEffects() {
+  for (let i = effects.length - 1; i >= 0; i--) {
+    effects[i].age++;
+    if (effects[i].age >= effects[i].duration) effects.splice(i, 1);
   }
 }
 
@@ -545,6 +573,28 @@ function drawCoin(x, y, size) {
   ctx.arc(0, 0, s * 0.45, 0, Math.PI * 2);
   ctx.fill();
 
+  ctx.restore();
+}
+
+function drawPortalCollapse(effect) {
+  const progress = Math.min(effect.age / effect.duration, 1);
+  const eased = 1 - Math.pow(1 - progress, 3);
+  const scale = Math.max(0.02, 1 - eased);
+  const palette = CAR_PALETTES[effect.color] || CAR_PALETTES.blue;
+
+  ctx.save();
+  ctx.translate(effect.x, effect.y);
+  ctx.scale(scale, scale);
+  ctx.globalAlpha = 1 - progress;
+  drawPortal(0, 0, effect.size, effect.color);
+
+  ctx.globalAlpha = 0.85 * (1 - progress);
+  ctx.fillStyle = palette.body;
+  ctx.shadowColor = palette.body;
+  ctx.shadowBlur = effect.size * 0.5;
+  ctx.beginPath();
+  ctx.arc(0, 0, effect.size * 0.16, 0, Math.PI * 2);
+  ctx.fill();
   ctx.restore();
 }
 
@@ -884,6 +934,10 @@ function draw() {
     if (obj.type === 'obstacle') drawObstacle(obj.x, obj.y, obj.size);
     else if (obj.type === 'collect') drawCoin(obj.x, obj.y, obj.size);
     else if (obj.type === 'portal')  drawPortal(obj.x, obj.y, obj.size, obj.color);
+  }
+
+  for (const effect of effects) {
+    if (effect.type === 'portalCollapse') drawPortalCollapse(effect);
   }
 
   // Player car
