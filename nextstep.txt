@@ -1,0 +1,63 @@
+Retro Arcade Racing Game - Visual Style Guide
+Goal: Keep the game simple, fast and vector-like, while giving it a polished arcade appearance.
+1. Overall Style
+Top-down 2D vector graphics.
+Bright saturated colors.
+Minimal details, clean silhouettes.
+Soft shadows instead of realistic rendering.
+Rounded corners everywhere.
+2. Color Palette
+Road: #2E3135 with subtle vertical gradient.
+Grass: #1B6D2A -> #228B35.
+Road borders: #FFC928 with soft glow.
+HUD: dark translucent (#111, 80% opacity).
+White lane markers.
+3. Road
+Use a subtle texture or gradient.
+Rounded lane dashes.
+Animate lane markers downward to convey speed.
+4. Grass
+Use a repeating pattern of decorative grass dots.
+Randomize scale, opacity and position slightly.
+Avoid highly detailed foliage.
+5. Car Sprites
+Use top-down vector sports cars.
+Create blue, white and purple variants.
+Include subtle gradients, dark windows, headlights and taillights.
+Add a soft shadow underneath.
+6. Obstacles & Collectibles
+Obstacle: glossy red diamond with orange center.
+Coin: red rim with golden center.
+Both use a soft drop shadow.
+7. HUD
+Rounded pill-shaped score panel.
+Bold font.
+Highlight numeric score in yellow.
+Rounded lives/power-up indicators.
+8. Animation
+Scroll road, grass and obstacles continuously.
+Small floating animation for coins.
+Optional glow pulse on collectibles.
+Optional slight scale animation when collecting items.
+9. Rendering
+Draw sprites on Canvas.
+Enable canvas shadows for cars, obstacles and coins.
+Keep the road itself shadow-free.
+10. Assets Checklist
+car_blue.png
+car_white.png
+car_purple.png
+obstacle_red.png
+coin_red.png
+grass_dot.png
+11. Implementation Order
+1. Background
+2. HUD
+3. Lane markers
+4. Car sprites
+5. Obstacle sprite
+6. Coin sprite
+7. Grass decorations
+8. Shadows
+9. Animations
+10. Final polish
