@@ -83,7 +83,7 @@ function roadMetrics() {
 }
 
 // ─── Game State ─────────────────────────────────────────────────────────────
-let gameState;        // 'menu' | 'playing' | 'gameover'
+let gameState;        // 'menu' | 'playing' | 'paused' | 'gameover'
 let score, highScore = 0;
 let frame;
 let speed;
@@ -93,12 +93,17 @@ let objects;          // [{ x, y, type, size, lane, color }]
 let roadOffset;
 let scoreTimer, spawnTimer, spawnInterval, diffTimer;
 let portalTimer, portalInterval;
+let nightTimer, nightInterval, nightPhaseTimer, nightPhase;
 let selectedCarColor, activeWorld;
+let colorIntroSeen, pauseReason;
 let lastTouchTime = 0;
 let touchStartPoint = null;
 
 resize();
 
+const queryParams = new URLSearchParams(window.location.search);
+const requestedDevWorld = queryParams.get('world');
+const devMode = queryParams.get('mode') === 'dev';
 const CAR_Y_FRAC          = 0.78;
 const LANE_LERP           = 0.14;
 // 28 % coins, 72 % obstacles — coins are stronger, but rarer.
@@ -108,8 +113,15 @@ const MAX_SPEED          = 16;
 const OPPOSING_OBSTACLE_GAP_MULT = 1.3;
 const COLOR_UNLOCK_SCORE = 10;
 const COLOR_ORDER        = ['blue', 'white', 'purple'];
+const devWorld = devMode && COLOR_ORDER.includes(requestedDevWorld) ? requestedDevWorld : null;
 const PORTAL_MIN_INTERVAL = 20;
 const PORTAL_MAX_INTERVAL = 120;
+const PORTAL_SCORE_BONUS = 50;
+const NIGHT_MIN_INTERVAL = 900;
+const NIGHT_MAX_INTERVAL = 1800;
+const NIGHT_WARNING_FRAMES = 180;
+const NIGHT_DURATION_FRAMES = 300;
+const NIGHT_BLINK_FRAMES = 24;
 const COLOR_SWIPE_MIN_FRAC = 0.055;
 // Hitbox is smaller than the visual to feel fair when near-missing
 const COLLISION_SCALE     = 0.65;
@@ -157,16 +169,26 @@ function initGame() {
   diffTimer  = 0;
   portalTimer = 0;
   portalInterval = randomPortalInterval();
-  selectedCarColor = 'blue';
-  activeWorld = 'blue';
+  nightTimer = 0;
+  nightInterval = randomNightInterval();
+  nightPhaseTimer = 0;
+  nightPhase = 'idle';
+  colorIntroSeen = devMode;
+  pauseReason = null;
+  selectedCarColor = devWorld || 'blue';
+  activeWorld = devWorld || 'blue';
 }
 
 function randomPortalInterval() {
   return PORTAL_MIN_INTERVAL + Math.floor(Math.random() * (PORTAL_MAX_INTERVAL - PORTAL_MIN_INTERVAL + 1));
 }
 
+function randomNightInterval() {
+  return NIGHT_MIN_INTERVAL + Math.floor(Math.random() * (NIGHT_MAX_INTERVAL - NIGHT_MIN_INTERVAL + 1));
+}
+
 function colorFeatureUnlocked() {
-  return score >= COLOR_UNLOCK_SCORE;
+  return devMode || score >= COLOR_UNLOCK_SCORE;
 }
 
 function currentTheme() {
@@ -264,6 +286,9 @@ function collides(obj) {
 
 // ─── Update ──────────────────────────────────────────────────────────────────
 function update() {
+  maybeShowColorIntro();
+  updateNightEffect();
+
   carX += (targetCarX - carX) * LANE_LERP;
 
   // Scroll road
@@ -312,9 +337,49 @@ function update() {
           return;
         }
         activeWorld = objects[i].color;
+        score += PORTAL_SCORE_BONUS;
+        resetNightEffect();
         objects.splice(i, 1);
       }
     }
+  }
+}
+
+function maybeShowColorIntro() {
+  if (!colorIntroSeen && colorFeatureUnlocked()) {
+    colorIntroSeen = true;
+    pauseReason = 'colorIntro';
+    gameState = 'paused';
+  }
+}
+
+function resetNightEffect() {
+  nightTimer = 0;
+  nightInterval = randomNightInterval();
+  nightPhaseTimer = 0;
+  nightPhase = 'idle';
+}
+
+function updateNightEffect() {
+  if (activeWorld !== 'white') {
+    resetNightEffect();
+    return;
+  }
+
+  if (nightPhase === 'idle') {
+    if (++nightTimer >= nightInterval) {
+      nightPhase = 'warning';
+      nightPhaseTimer = 0;
+    }
+    return;
+  }
+
+  nightPhaseTimer++;
+  if (nightPhase === 'warning' && nightPhaseTimer >= NIGHT_WARNING_FRAMES) {
+    nightPhase = 'night';
+    nightPhaseTimer = 0;
+  } else if (nightPhase === 'night' && nightPhaseTimer >= NIGHT_DURATION_FRAMES) {
+    resetNightEffect();
   }
 }
 
@@ -671,6 +736,59 @@ function drawMenu(r) {
   ctx.restore();
 }
 
+function drawNightOverlay(r, carCx, carCy, carW, carH) {
+  if (activeWorld !== 'white' || nightPhase === 'idle') return;
+
+  const isWarningDark = nightPhase === 'warning' && Math.floor(nightPhaseTimer / NIGHT_BLINK_FRAMES) % 2 === 1;
+  const alpha = nightPhase === 'night' ? 0.88 : (isWarningDark ? 0.56 : 0);
+  if (alpha <= 0) return;
+
+  ctx.save();
+  ctx.fillStyle = `rgba(2,6,18,${alpha})`;
+  ctx.fillRect(0, 0, r.W, r.H);
+  ctx.globalCompositeOperation = 'destination-out';
+  const beam = ctx.createRadialGradient(carCx, carCy - carH * 0.45, carW * 0.25, carCx, carCy - carH * 1.2, carW * 2.2);
+  beam.addColorStop(0, 'rgba(255,255,255,0.95)');
+  beam.addColorStop(0.45, 'rgba(255,255,255,0.50)');
+  beam.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = beam;
+  ctx.beginPath();
+  ctx.ellipse(carCx, carCy - carH * 0.85, carW * 2.0, carH * 1.25, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.fillStyle = `rgba(255,245,170,${nightPhase === 'night' ? 0.18 : 0.30})`;
+  ctx.beginPath();
+  ctx.ellipse(carCx, carCy - carH * 0.85, carW * 1.7, carH * 1.05, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawColorIntroModal(r) {
+  ctx.fillStyle = 'rgba(0,0,0,0.68)';
+  ctx.fillRect(0, 0, r.W, r.H);
+  const cx = r.W / 2;
+  const boxW = r.W * 0.78;
+  const boxH = r.H * 0.30;
+  const fBig = Math.max(18, r.H * 0.045);
+  const fSm = Math.max(13, r.H * 0.032);
+  ctx.fillStyle = 'rgba(20,24,35,0.96)';
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.roundRect(cx - boxW / 2, r.H * 0.34, boxW, boxH, 18);
+  ctx.fill();
+  ctx.stroke();
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ffffff';
+  ctx.font = `bold ${fBig}px Arial, sans-serif`;
+  ctx.fillText('New move!', cx, r.H * 0.43);
+  ctx.font = `${fSm}px Arial, sans-serif`;
+  ctx.fillText('Swipe up or down', cx, r.H * 0.50);
+  ctx.fillText('to change your car color.', cx, r.H * 0.55);
+  ctx.fillStyle = '#ffd700';
+  ctx.fillText('Tap to keep driving', cx, r.H * 0.62);
+}
+
 function drawGameOver(r) {
   ctx.fillStyle = 'rgba(0,0,0,0.72)';
   ctx.fillRect(0, 0, r.W, r.H);
@@ -726,9 +844,13 @@ function draw() {
   // Player car
   const { carW, carH, carY } = carDims();
   drawCar(carX, carY, carW, carH);
+  drawNightOverlay(r, carX, carY, carW, carH);
 
   if (gameState === 'playing') {
     drawHUD();
+  } else if (gameState === 'paused') {
+    drawHUD();
+    drawColorIntroModal(r);
   } else if (gameState === 'menu') {
     drawHUD();
     drawMenu(r);
@@ -741,6 +863,11 @@ function draw() {
 // ─── Input ───────────────────────────────────────────────────────────────────
 
 function handleTap() {
+  if (gameState === 'paused') {
+    gameState = 'playing';
+    pauseReason = null;
+    return;
+  }
   if (gameState === 'menu') {
     gameState = 'playing';
     initGame();
@@ -782,6 +909,11 @@ function colorSwipeDirection(start, end) {
 }
 
 function handlePointerPress(point) {
+  if (gameState === 'paused') {
+    handleTap();
+    return;
+  }
+
   if (gameState === 'menu' || gameState === 'gameover') {
     handleTap();
     return;
@@ -793,6 +925,11 @@ function handlePointerPress(point) {
 }
 
 function handleTouchEnd(start, end) {
+  if (gameState === 'paused') {
+    handleTap();
+    return;
+  }
+
   if (gameState === 'menu' || gameState === 'gameover') {
     handleTap();
     return;
@@ -866,13 +1003,13 @@ window.addEventListener('keydown', (e) => {
 function loop() {
   frame++;
   if (gameState === 'playing') update();
-  else roadOffset += 1.5;    // animate road in menu/gameover background
+  else if (gameState !== 'paused') roadOffset += 1.5;    // animate road in menu/gameover background
   draw();
   requestAnimationFrame(loop);
 }
 
 // ─── Boot ────────────────────────────────────────────────────────────────────
-gameState = 'menu';
+gameState = devMode ? 'playing' : 'menu';
 initGame();
 loop();
 </script>
