@@ -579,8 +579,8 @@ function drawPortal(x, y, size, color) {
   ctx.restore();
 }
 
-function drawCar(cx, cy, carW, carH) {
-  const palette = CAR_PALETTES[selectedCarColor] || CAR_PALETTES.blue;
+function drawCar(cx, cy, carW, carH, color = selectedCarColor) {
+  const palette = CAR_PALETTES[color] || CAR_PALETTES.blue;
   ctx.save();
   ctx.translate(cx, cy);
 
@@ -652,26 +652,46 @@ function drawHUD() {
   drawColorStatus();
 }
 
+function orderedColorPreview() {
+  const idx = COLOR_ORDER.indexOf(selectedCarColor);
+  const safeIdx = idx === -1 ? 0 : idx;
+  return [
+    COLOR_ORDER[(safeIdx - 1 + COLOR_ORDER.length) % COLOR_ORDER.length],
+    COLOR_ORDER[safeIdx],
+    COLOR_ORDER[(safeIdx + 1) % COLOR_ORDER.length]
+  ];
+}
+
 function drawColorStatus() {
   if (gameState !== 'playing' || !colorFeatureUnlocked()) return;
 
-  const chipR = Math.max(5, canvas.width * 0.014);
-  const gap = chipR * 2.7;
-  const startX = canvas.width - canvas.width * 0.08 - gap * (COLOR_ORDER.length - 1);
-  const y = canvas.height * 0.052;
+  const chipR = Math.max(7, canvas.width * 0.020);
+  const gap = chipR * 2.55;
+  const x = canvas.width - canvas.width * 0.065;
+  const y = canvas.height * 0.095;
+  const colors = orderedColorPreview();
 
-  for (let i = 0; i < COLOR_ORDER.length; i++) {
-    const color = COLOR_ORDER[i];
+  ctx.save();
+  ctx.fillStyle = 'rgba(0,0,0,0.24)';
+  ctx.beginPath();
+  ctx.roundRect(x - chipR * 1.55, y - gap - chipR * 1.45, chipR * 3.1, gap * 2 + chipR * 2.9, chipR * 0.9);
+  ctx.fill();
+
+  for (let i = 0; i < colors.length; i++) {
+    const color = colors[i];
     const palette = CAR_PALETTES[color];
-    const x = startX + i * gap;
+    const cy = y + (i - 1) * gap;
+    const active = color === selectedCarColor;
+    ctx.globalAlpha = active ? 1 : 0.76;
     ctx.fillStyle = palette.body;
-    ctx.strokeStyle = color === selectedCarColor ? '#ffffff' : 'rgba(255,255,255,0.35)';
-    ctx.lineWidth = color === selectedCarColor ? 2 : 1;
+    ctx.strokeStyle = active ? '#ffffff' : 'rgba(255,255,255,0.45)';
+    ctx.lineWidth = active ? 3 : 1.4;
     ctx.beginPath();
-    ctx.arc(x, y, chipR, 0, Math.PI * 2);
+    ctx.arc(x, cy, active ? chipR * 1.12 : chipR, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
   }
+  ctx.restore();
 }
 
 // ─── Overlay Screens ─────────────────────────────────────────────────────────
@@ -763,30 +783,55 @@ function drawNightOverlay(r, carCx, carCy, carW, carH) {
   ctx.restore();
 }
 
+function drawVerticalSwipeIcon(x, y, size) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.strokeStyle = '#ffffff';
+  ctx.fillStyle = '#ffffff';
+  ctx.lineWidth = Math.max(3, size * 0.08);
+  ctx.lineCap = 'round';
+
+  ctx.beginPath();
+  ctx.moveTo(0, -size * 0.46);
+  ctx.lineTo(0, size * 0.46);
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.moveTo(0, -size * 0.54);
+  ctx.lineTo(-size * 0.18, -size * 0.34);
+  ctx.lineTo(size * 0.18, -size * 0.34);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.beginPath();
+  ctx.moveTo(0, size * 0.54);
+  ctx.lineTo(-size * 0.18, size * 0.34);
+  ctx.lineTo(size * 0.18, size * 0.34);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.restore();
+}
+
 function drawColorIntroModal(r) {
   ctx.fillStyle = 'rgba(0,0,0,0.68)';
   ctx.fillRect(0, 0, r.W, r.H);
   const cx = r.W / 2;
-  const boxW = r.W * 0.78;
-  const boxH = r.H * 0.30;
-  const fBig = Math.max(18, r.H * 0.045);
-  const fSm = Math.max(13, r.H * 0.032);
+  const boxW = r.W * 0.66;
+  const boxH = r.H * 0.24;
+  const boxY = r.H * 0.38;
   ctx.fillStyle = 'rgba(20,24,35,0.96)';
   ctx.strokeStyle = '#ffffff';
   ctx.lineWidth = 2;
   ctx.beginPath();
-  ctx.roundRect(cx - boxW / 2, r.H * 0.34, boxW, boxH, 18);
+  ctx.roundRect(cx - boxW / 2, boxY, boxW, boxH, 18);
   ctx.fill();
   ctx.stroke();
-  ctx.textAlign = 'center';
-  ctx.fillStyle = '#ffffff';
-  ctx.font = `bold ${fBig}px Arial, sans-serif`;
-  ctx.fillText('New move!', cx, r.H * 0.43);
-  ctx.font = `${fSm}px Arial, sans-serif`;
-  ctx.fillText('Swipe up or down', cx, r.H * 0.50);
-  ctx.fillText('to change your car color.', cx, r.H * 0.55);
-  ctx.fillStyle = '#ffd700';
-  ctx.fillText('Tap to keep driving', cx, r.H * 0.62);
+
+  const carW = boxW * 0.25;
+  const carH = carW * 1.85;
+  drawCar(cx - boxW * 0.13, boxY + boxH * 0.50, carW, carH, 'purple');
+  drawVerticalSwipeIcon(cx + boxW * 0.22, boxY + boxH * 0.50, boxH * 0.54);
 }
 
 function drawGameOver(r) {
