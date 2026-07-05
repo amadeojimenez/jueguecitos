@@ -29,7 +29,7 @@
 const canvas = document.getElementById('gameCanvas');
 const ctx    = canvas.getContext('2d');
 // increase this version in any change in the code
-const GAME_VERSION = 'v0.3.0';
+const GAME_VERSION = 'v0.4.0';
 
 function resize() {
   // Portrait 9:16 ratio, fill the viewport
@@ -95,10 +95,10 @@ let objects;          // [{ x, y, type, size, lane, color }]
 let effects;          // [{ x, y, type, size, color, age, duration }]
 let roadOffset;
 let scoreTimer, spawnTimer, spawnInterval, diffTimer;
-let portalTimer, portalInterval;
+let portalTimer, portalInterval, portalQueued;
 let nightTimer, nightInterval, nightPhaseTimer, nightPhase;
 let selectedCarColor, activeWorld;
-let colorIntroSeen, pauseReason;
+let colorIntroSeen, pauseReason, pauseStartedAt;
 let lastTouchTime = 0;
 let touchStartPoint = null;
 
@@ -111,7 +111,7 @@ const CAR_Y_FRAC          = 0.78;
 const LANE_LERP           = 0.14;
 // 28 % coins, 72 % obstacles — coins are stronger, but rarer.
 const COIN_SPAWN_PROBABILITY = 0.28;
-const COIN_SPEED_BONUS   = 0.45;
+const COIN_SPEED_BONUS   = 0.225;
 const MAX_SPEED          = 16;
 const OPPOSING_OBSTACLE_GAP_MULT = 1.3;
 const COLOR_UNLOCK_SCORE = 10;
@@ -120,6 +120,7 @@ const devWorld = devMode && COLOR_ORDER.includes(requestedDevWorld) ? requestedD
 const PORTAL_MIN_INTERVAL = 20;
 const PORTAL_MAX_INTERVAL = 120;
 const PORTAL_SCORE_BONUS = 50;
+const COLOR_INTRO_MIN_PAUSE_MS = 1000;
 const NIGHT_MIN_INTERVAL = 900;
 const NIGHT_MAX_INTERVAL = 1800;
 const DEV_NIGHT_MIN_INTERVAL = 120;
@@ -175,12 +176,14 @@ function initGame() {
   diffTimer  = 0;
   portalTimer = 0;
   portalInterval = randomPortalInterval();
+  portalQueued = false;
   nightTimer = 0;
   nightInterval = randomNightInterval();
   nightPhaseTimer = 0;
   nightPhase = 'idle';
   colorIntroSeen = devMode;
   pauseReason = null;
+  pauseStartedAt = 0;
   selectedCarColor = devWorld || 'blue';
   activeWorld = devWorld || 'blue';
 }
@@ -255,11 +258,18 @@ function canSpawnPortalAt(y, minGap) {
   return !objects.some(obj => Math.abs(obj.y - y) < minGap);
 }
 
+function shouldSpawnPortalSlot() {
+  if (!portalQueued || !colorFeatureUnlocked() || objects.some(obj => obj.type === 'portal')) return false;
+  portalQueued = false;
+  return true;
+}
+
 function spawnObject() {
   const r    = roadMetrics();
   let lane = Math.random() < 0.5 ? 0 : 1;
-  const type = Math.random() < COIN_SPAWN_PROBABILITY ? 'collect' : 'obstacle';
-  const size = r.laneW * 0.32;
+  const spawnPortalSlot = shouldSpawnPortalSlot();
+  const type = spawnPortalSlot ? 'portal' : (Math.random() < COIN_SPAWN_PROBABILITY ? 'collect' : 'obstacle');
+  const size = type === 'portal' ? r.laneW * 0.48 : r.laneW * 0.32;
   const y = -size * 1.2;
 
   if (type === 'obstacle') {
@@ -272,6 +282,12 @@ function spawnObject() {
   }
 
   const x = lane === 0 ? r.lane0 : r.lane1;
+  if (type === 'portal') {
+    const choices = COLOR_ORDER.filter(color => color !== activeWorld);
+    const color = choices[Math.floor(Math.random() * choices.length)];
+    objects.push({ x, y, type, size, lane, color });
+    return;
+  }
   objects.push({ x, y, type, size, lane });
 }
 
@@ -319,7 +335,7 @@ function update() {
 
   // Difficulty ramp every ~5 s
   if (++diffTimer >= 300) {
-    speed         = Math.min(speed + 0.4, MAX_SPEED);
+    speed         = Math.min(speed + 0.2, MAX_SPEED);
     spawnInterval = Math.max(spawnInterval - 5, 28);
     diffTimer = 0;
   }
@@ -330,8 +346,9 @@ function update() {
     spawnTimer = 0;
   }
 
-  if (colorFeatureUnlocked() && ++portalTimer >= portalInterval) {
-    spawnPortal();
+
+  if (colorFeatureUnlocked() && !portalQueued && ++portalTimer >= portalInterval) {
+    portalQueued = true;
     portalTimer = 0;
     portalInterval = randomPortalInterval();
   }
@@ -379,6 +396,7 @@ function maybeShowColorIntro() {
   if (!colorIntroSeen && colorFeatureUnlocked()) {
     colorIntroSeen = true;
     pauseReason = 'colorIntro';
+    pauseStartedAt = Date.now();
     gameState = 'paused';
   }
 }
@@ -708,9 +726,9 @@ function orderedColorPreview() {
   const idx = COLOR_ORDER.indexOf(selectedCarColor);
   const safeIdx = idx === -1 ? 0 : idx;
   return [
-    COLOR_ORDER[(safeIdx - 1 + COLOR_ORDER.length) % COLOR_ORDER.length],
+    COLOR_ORDER[(safeIdx + 1) % COLOR_ORDER.length],
     COLOR_ORDER[safeIdx],
-    COLOR_ORDER[(safeIdx + 1) % COLOR_ORDER.length]
+    COLOR_ORDER[(safeIdx - 1 + COLOR_ORDER.length) % COLOR_ORDER.length]
   ];
 }
 
@@ -995,8 +1013,10 @@ function draw() {
 
 function handleTap() {
   if (gameState === 'paused') {
+    if (pauseReason === 'colorIntro' && Date.now() - pauseStartedAt < COLOR_INTRO_MIN_PAUSE_MS) return;
     gameState = 'playing';
     pauseReason = null;
+    pauseStartedAt = 0;
     return;
   }
   if (gameState === 'menu') {
@@ -1081,6 +1101,7 @@ canvas.addEventListener('touchstart', (e) => {
   lastTouchTime = Date.now();
   const touch = e.changedTouches[0];
   touchStartPoint = canvasPoint(touch.clientX, touch.clientY);
+  if (gameState === 'playing') moveByScreenSide(touchStartPoint);
 }, { passive: false });
 
 canvas.addEventListener('touchend', (e) => {
