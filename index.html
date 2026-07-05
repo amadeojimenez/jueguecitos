@@ -28,6 +28,7 @@
 // ─── Canvas & Resize ────────────────────────────────────────────────────────
 const canvas = document.getElementById('gameCanvas');
 const ctx    = canvas.getContext('2d');
+const GAME_VERSION = 'v0.1.0';
 
 function resize() {
   // Portrait 9:16 ratio, fill the viewport
@@ -734,6 +735,11 @@ function drawMenu(r) {
   ctx.textAlign = 'center';
   ctx.fillText('TAP TO START', 0, fMid * 0.38);
   ctx.restore();
+
+  ctx.font = `${Math.max(9, r.H * 0.018)}px Arial, sans-serif`;
+  ctx.fillStyle = 'rgba(255,255,255,0.55)';
+  ctx.textAlign = 'center';
+  ctx.fillText(GAME_VERSION, cx, r.H * 0.91);
 }
 
 function drawNightOverlay(r, carCx, carCy, carW, carH) {
