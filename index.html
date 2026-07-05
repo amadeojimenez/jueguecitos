@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>Lane Dodger</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #111;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100dvh;
+      overflow: hidden;
+    }
+    canvas {
+      display: block;
+      touch-action: none;
+    }
+  </style>
+</head>
+<body>
+<canvas id="gameCanvas"></canvas>
+<script>
+'use strict';
+
+// ─── Canvas & Resize ────────────────────────────────────────────────────────
+const canvas = document.getElementById('gameCanvas');
+const ctx    = canvas.getContext('2d');
+
+function resize() {
+  // Portrait 9:16 ratio, fill the viewport
+  const maxH = window.innerHeight;
+  const maxW = window.innerWidth;
+  const ratio = 9 / 16;
+  let w = maxH * ratio;
+  let h = maxH;
+  if (w > maxW) { w = maxW; h = maxW / ratio; }
+  canvas.width  = Math.floor(w);
+  canvas.height = Math.floor(h);
+  // Re-snap car after resize if already playing
+  if (typeof carX !== 'undefined') {
+    const r = roadMetrics();
+    targetCarX = playerLane === 0 ? r.lane0 : r.lane1;
+    carX = targetCarX;
+  }
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ─── roundRect polyfill (pre-Chrome-99 / pre-FF-112) ────────────────────────
+if (!CanvasRenderingContext2D.prototype.roundRect) {
+  CanvasRenderingContext2D.prototype.roundRect = function (x, y, w, h, r) {
+    r = Math.min(r, w / 2, h / 2);
+    this.beginPath();
+    this.moveTo(x + r, y);
+    this.lineTo(x + w - r, y);
+    this.quadraticCurveTo(x + w, y,     x + w, y + r);
+    this.lineTo(x + w, y + h - r);
+    this.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    this.lineTo(x + r, y + h);
+    this.quadraticCurveTo(x, y + h,     x, y + h - r);
+    this.lineTo(x, y + r);
+    this.quadraticCurveTo(x, y,         x + r, y);
+    this.closePath();
+  };
+}
+
+// ─── Road Metrics ───────────────────────────────────────────────────────────
+const GRASS_FRAC = 0.10; // fraction of canvas width for each grass strip
+
+function roadMetrics() {
+  const W = canvas.width, H = canvas.height;
+  const grassW   = W * GRASS_FRAC;
+  const roadL    = grassW;
+  const roadR    = W - grassW;
+  const roadW    = roadR - roadL;
+  const laneW    = roadW / 2;
+  const centerX  = roadL + roadW / 2;
+  const lane0    = roadL + laneW / 2;        // left lane x-center
+  const lane1    = roadL + laneW * 1.5;      // right lane x-center
+  return { W, H, grassW, roadL, roadR, roadW, laneW, centerX, lane0, lane1 };
+}
+
+// ─── Game State ─────────────────────────────────────────────────────────────
+let gameState;        // 'menu' | 'playing' | 'gameover'
+let score, highScore = 0;
+let frame;
+let speed;
+let playerLane;       // 0 = left, 1 = right
+let carX, targetCarX;
+let objects;          // [{ x, y, type, size }]
+let roadOffset;
+let scoreTimer, spawnTimer, spawnInterval, diffTimer;
+
+const CAR_Y_FRAC          = 0.78;
+const LANE_LERP           = 0.14;
+// 38 % coins, 62 % obstacles — tuned for a fun challenge-vs-reward balance
+const COIN_SPAWN_PROBABILITY = 0.38;
+// Hitbox is smaller than the visual to feel fair when near-missing
+const COLLISION_SCALE     = 0.65;
+
+function initGame() {
+  const r    = roadMetrics();
+  playerLane = 0;
+  carX       = r.lane0;
+  targetCarX = r.lane0;
+  objects    = [];
+  score      = 0;
+  frame      = 0;
+  speed      = 4;
+  roadOffset = 0;
+  scoreTimer = 0;
+  spawnTimer = 0;
+  spawnInterval = 80;
+  diffTimer  = 0;
+}
+
+// ─── Car Dimensions (top-down view) ─────────────────────────────────────────
+function carDims() {
+  const r   = roadMetrics();
+  const carW = r.laneW * 0.52;
+  const carH = carW * 1.85;
+  const carY = canvas.height * CAR_Y_FRAC;
+  return { carW, carH, carY };
+}
+
+// ─── Spawn Object ────────────────────────────────────────────────────────────
+function spawnObject() {
+  const r    = roadMetrics();
+  const lane = Math.random() < 0.5 ? 0 : 1;
+  const x    = lane === 0 ? r.lane0 : r.lane1;
+  const type = Math.random() < COIN_SPAWN_PROBABILITY ? 'collect' : 'obstacle';
+  const size = r.laneW * 0.32;
+  objects.push({ x, y: -size * 1.2, type, size });
+}
+
+// ─── Collision ───────────────────────────────────────────────────────────────
+function collides(obj) {
+  const { carW, carH, carY } = carDims();
+  const cL = carX  - carW * COLLISION_SCALE / 2;
+  const cR = carX  + carW * COLLISION_SCALE / 2;
+  const cT = carY  - carH * COLLISION_SCALE / 2;
+  const cB = carY  + carH * COLLISION_SCALE / 2;
+  const oS = obj.size * 0.85;
+  return cL < obj.x + oS && cR > obj.x - oS &&
+         cT < obj.y + oS && cB > obj.y - oS;
+}
+
+// ─── Update ──────────────────────────────────────────────────────────────────
+function update() {
+  carX += (targetCarX - carX) * LANE_LERP;
+
+  // Scroll road
+  roadOffset += speed;
+
+  // Score every 30 frames (~½ s at 60 fps)
+  if (++scoreTimer >= 30) { score++; scoreTimer = 0; }
+
+  // Difficulty ramp every ~5 s
+  if (++diffTimer >= 300) {
+    speed         = Math.min(speed + 0.5, 15);
+    spawnInterval = Math.max(spawnInterval - 4, 36);
+    diffTimer = 0;
+  }
+
+  // Spawn
+  if (++spawnTimer >= spawnInterval) {
+    spawnObject();
+    spawnTimer = 0;
+  }
+
+  // Move & check objects
+  for (let i = objects.length - 1; i >= 0; i--) {
+    objects[i].y += speed;
+    if (objects[i].y > canvas.height + objects[i].size * 2) {
+      objects.splice(i, 1);
+      continue;
+    }
+    if (collides(objects[i])) {
+      if (objects[i].type === 'obstacle') {
+        if (score > highScore) highScore = score;
+        gameState = 'gameover';
+        return;
+      } else {
+        score += 10;
+        objects.splice(i, 1);
+      }
+    }
+  }
+}
+
+// ─── Drawing Helpers ─────────────────────────────────────────────────────────
+
+function drawBackground(r) {
+  // Grass strips
+  ctx.fillStyle = '#2a5e22';
+  ctx.fillRect(0, 0, r.grassW, r.H);
+  ctx.fillRect(r.roadR, 0, r.grassW, r.H);
+
+  // Animated grass dots for motion feel
+  ctx.fillStyle = '#3a7a2e';
+  const dotSpacing = r.H * 0.09;
+  const dotOffset  = roadOffset * 0.4 % dotSpacing;
+  for (let y = -dotSpacing + dotOffset; y < r.H + dotSpacing; y += dotSpacing) {
+    const dotR = r.grassW * 0.18;
+    ctx.beginPath();
+    ctx.arc(r.grassW * 0.35, y,             dotR, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath();
+    ctx.arc(r.grassW * 0.70, y + dotSpacing * 0.5, dotR, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath();
+    ctx.arc(r.roadR + r.grassW * 0.30, y + dotSpacing * 0.25, dotR, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath();
+    ctx.arc(r.roadR + r.grassW * 0.70, y + dotSpacing * 0.75, dotR, 0, Math.PI * 2); ctx.fill();
+  }
+}
+
+function drawRoad(r) {
+  // Road surface
+  ctx.fillStyle = '#3d3d3d';
+  ctx.fillRect(r.roadL, 0, r.roadW, r.H);
+
+  // Edge curbs (yellow)
+  ctx.fillStyle = '#e0b020';
+  ctx.fillRect(r.roadL,     0, 4, r.H);
+  ctx.fillRect(r.roadR - 4, 0, 4, r.H);
+
+  // Scrolling centre dashes
+  const dashH  = r.H * 0.065;
+  const gapH   = r.H * 0.050;
+  const period = dashH + gapH;
+  const off    = roadOffset % period;
+  ctx.fillStyle = '#ffffff';
+  for (let y = -period + off; y < r.H + period; y += period) {
+    ctx.fillRect(r.centerX - 2, y, 4, dashH);
+  }
+}
+
+function drawObstacle(x, y, size) {
+  // Red/orange diamond (rotated square) — danger shape
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(Math.PI / 4);
+  const s = size * 0.72;
+
+  // Outer
+  ctx.fillStyle   = '#e03020';
+  ctx.strokeStyle = '#ff6030';
+  ctx.lineWidth   = 2.5;
+  ctx.beginPath();
+  ctx.roundRect(-s, -s, s * 2, s * 2, s * 0.18);
+  ctx.fill();
+  ctx.stroke();
+
+  // Inner highlight
+  const si = s * 0.45;
+  ctx.fillStyle = '#ff8844';
+  ctx.beginPath();
+  ctx.roundRect(-si, -si, si * 2, si * 2, si * 0.18);
+  ctx.fill();
+
+  ctx.restore();
+}
+
+function drawCoin(x, y, size) {
+  // Gold circle with star — collectible
+  ctx.save();
+  ctx.translate(x, y);
+
+  // Outer glow ring
+  const grad = ctx.createRadialGradient(0, 0, size * 0.3, 0, 0, size * 0.75);
+  grad.addColorStop(0,   '#ffe060');
+  grad.addColorStop(0.7, '#f0a000');
+  grad.addColorStop(1,   'rgba(240,160,0,0)');
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.arc(0, 0, size * 0.75, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Main coin
+  ctx.fillStyle   = '#ffd700';
+  ctx.strokeStyle = '#c08000';
+  ctx.lineWidth   = 2;
+  ctx.beginPath();
+  ctx.arc(0, 0, size * 0.60, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+
+  // Star inside
+  const pts   = 5;
+  const outerR = size * 0.33;
+  const innerR = size * 0.14;
+  ctx.fillStyle = '#c07800';
+  ctx.beginPath();
+  for (let i = 0; i < pts * 2; i++) {
+    const ang = (i * Math.PI) / pts - Math.PI / 2;
+    const r2  = i % 2 === 0 ? outerR : innerR;
+    if (i === 0) ctx.moveTo(r2 * Math.cos(ang), r2 * Math.sin(ang));
+    else         ctx.lineTo(r2 * Math.cos(ang), r2 * Math.sin(ang));
+  }
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.restore();
+}
+
+function drawCar(cx, cy, carW, carH) {
+  ctx.save();
+  ctx.translate(cx, cy);
+
+  // Shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.25)';
+  ctx.beginPath();
+  ctx.ellipse(4, 6, carW * 0.45, carH * 0.22, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Body
+  ctx.fillStyle = '#2980d9';
+  ctx.beginPath();
+  ctx.roundRect(-carW / 2, -carH / 2, carW, carH, carW * 0.18);
+  ctx.fill();
+
+  // Roof
+  const rfW = carW * 0.68, rfH = carH * 0.44;
+  const rfX = -rfW / 2, rfY = -carH / 2 + carH * 0.10;
+  ctx.fillStyle = '#1a60a8';
+  ctx.beginPath();
+  ctx.roundRect(rfX, rfY, rfW, rfH, carW * 0.12);
+  ctx.fill();
+
+  // Windshield (front – top in top-down)
+  ctx.fillStyle = 'rgba(190,235,255,0.85)';
+  ctx.beginPath();
+  ctx.roundRect(-carW * 0.27, -carH / 2 + carH * 0.12, carW * 0.54, carH * 0.20, 4);
+  ctx.fill();
+
+  // Rear window
+  ctx.fillStyle = 'rgba(190,235,255,0.65)';
+  ctx.beginPath();
+  ctx.roundRect(-carW * 0.27, -carH / 2 + carH * 0.36, carW * 0.54, carH * 0.13, 4);
+  ctx.fill();
+
+  // Headlights (top)
+  ctx.fillStyle = '#ffffbb';
+  ctx.beginPath();
+  ctx.roundRect(-carW * 0.42, -carH / 2 + carH * 0.03, carW * 0.18, carH * 0.07, 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.roundRect( carW * 0.24, -carH / 2 + carH * 0.03, carW * 0.18, carH * 0.07, 2);
+  ctx.fill();
+
+  // Tail-lights (bottom)
+  ctx.fillStyle = '#ff2200';
+  ctx.beginPath();
+  ctx.roundRect(-carW * 0.42, carH / 2 - carH * 0.10, carW * 0.18, carH * 0.07, 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.roundRect( carW * 0.24, carH / 2 - carH * 0.10, carW * 0.18, carH * 0.07, 2);
+  ctx.fill();
+
+  ctx.restore();
+}
+
+function drawHUD() {
+  const fSize = Math.max(14, canvas.height * 0.038);
+  ctx.font      = `bold ${fSize}px Arial, sans-serif`;
+  ctx.textAlign = 'center';
+
+  // Score shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  ctx.fillText(`Score: ${score}`, canvas.width / 2 + 1, canvas.height * 0.05 + 1);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText(`Score: ${score}`, canvas.width / 2,     canvas.height * 0.05);
+}
+
+// ─── Overlay Screens ─────────────────────────────────────────────────────────
+
+function drawMenu(r) {
+  ctx.fillStyle = 'rgba(0,0,0,0.60)';
+  ctx.fillRect(0, 0, r.W, r.H);
+
+  const cx   = r.W / 2;
+  const fBig = Math.max(20, r.H * 0.070);
+  const fMid = Math.max(14, r.H * 0.038);
+  const fSm  = Math.max(12, r.H * 0.030);
+
+  ctx.textAlign = 'center';
+
+  // Title
+  ctx.font      = `bold ${fBig}px Arial, sans-serif`;
+  ctx.fillStyle = '#ffd700';
+  ctx.fillText('LANE DODGER', cx, r.H * 0.26);
+
+  // Instructions
+  ctx.font      = `${fMid}px Arial, sans-serif`;
+  ctx.fillStyle = '#dddddd';
+  ctx.fillText('Tap anywhere to switch lanes', cx, r.H * 0.38);
+
+  // Legend items
+  const iconY1 = r.H * 0.475;
+  const iconY2 = r.H * 0.555;
+  const iconS  = r.H * 0.028;
+
+  drawObstacle(cx - r.W * 0.20, iconY1, iconS * 1.2);
+  ctx.font      = `${fSm}px Arial, sans-serif`;
+  ctx.fillStyle = '#ffaaaa';
+  ctx.textAlign = 'left';
+  ctx.fillText('Avoid — game over on hit', cx - r.W * 0.10, iconY1 + iconS * 0.4);
+
+  drawCoin(cx - r.W * 0.20, iconY2, iconS * 1.2);
+  ctx.fillStyle = '#ffd700';
+  ctx.fillText('Collect — +10 points', cx - r.W * 0.10, iconY2 + iconS * 0.4);
+
+  if (highScore > 0) {
+    ctx.textAlign = 'center';
+    ctx.font      = `${fSm}px Arial, sans-serif`;
+    ctx.fillStyle = '#aaaaff';
+    ctx.fillText(`Best: ${highScore}`, cx, r.H * 0.64);
+  }
+
+  // Pulsing button
+  const pulse = 0.94 + 0.06 * Math.sin(frame * 0.06);
+  ctx.save();
+  ctx.translate(cx, r.H * 0.78);
+  ctx.scale(pulse, pulse);
+  const btnW = r.W * 0.56, btnH = r.H * 0.10;
+  ctx.fillStyle = '#27ae60';
+  ctx.beginPath();
+  ctx.roundRect(-btnW / 2, -btnH / 2, btnW, btnH, btnH * 0.3);
+  ctx.fill();
+  ctx.font      = `bold ${fMid * 1.1}px Arial, sans-serif`;
+  ctx.fillStyle = '#ffffff';
+  ctx.textAlign = 'center';
+  ctx.fillText('TAP TO START', 0, fMid * 0.38);
+  ctx.restore();
+}
+
+function drawGameOver(r) {
+  ctx.fillStyle = 'rgba(0,0,0,0.72)';
+  ctx.fillRect(0, 0, r.W, r.H);
+
+  const cx   = r.W / 2;
+  const fBig = Math.max(20, r.H * 0.075);
+  const fMid = Math.max(14, r.H * 0.050);
+  const fSm  = Math.max(12, r.H * 0.032);
+
+  ctx.textAlign = 'center';
+
+  ctx.font      = `bold ${fBig}px Arial, sans-serif`;
+  ctx.fillStyle = '#ff4444';
+  ctx.fillText('GAME OVER', cx, r.H * 0.36);
+
+  ctx.font      = `${fMid}px Arial, sans-serif`;
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText(`Score: ${score}`, cx, r.H * 0.48);
+
+  if (score >= highScore) {
+    ctx.font      = `bold ${fSm * 1.1}px Arial, sans-serif`;
+    ctx.fillStyle = '#ffd700';
+    ctx.fillText('🏆 NEW HIGH SCORE!', cx, r.H * 0.57);
+  } else {
+    ctx.font      = `${fSm}px Arial, sans-serif`;
+    ctx.fillStyle = '#aaaaff';
+    ctx.fillText(`Best: ${highScore}`, cx, r.H * 0.57);
+  }
+
+  ctx.font      = `${fSm}px Arial, sans-serif`;
+  ctx.fillStyle = '#cccccc';
+  ctx.fillText('Tap to return to menu', cx, r.H * 0.72);
+}
+
+// ─── Main Render ─────────────────────────────────────────────────────────────
+
+function draw() {
+  const r = roadMetrics();
+
+  // Clear
+  ctx.clearRect(0, 0, r.W, r.H);
+
+  drawBackground(r);
+  drawRoad(r);
+
+  // Game objects
+  for (const obj of objects) {
+    if (obj.type === 'obstacle') drawObstacle(obj.x, obj.y, obj.size);
+    else                         drawCoin(obj.x, obj.y, obj.size);
+  }
+
+  // Player car
+  const { carW, carH, carY } = carDims();
+  drawCar(carX, carY, carW, carH);
+
+  if (gameState === 'playing') {
+    drawHUD();
+  } else if (gameState === 'menu') {
+    drawHUD();
+    drawMenu(r);
+  } else if (gameState === 'gameover') {
+    drawHUD();
+    drawGameOver(r);
+  }
+}
+
+// ─── Input ───────────────────────────────────────────────────────────────────
+
+function handleTap() {
+  if (gameState === 'menu') {
+    gameState = 'playing';
+    initGame();
+    return;
+  }
+  if (gameState === 'gameover') {
+    gameState = 'menu';
+    return;
+  }
+  if (gameState === 'playing') {
+    playerLane = playerLane === 0 ? 1 : 0;
+    const r    = roadMetrics();
+    targetCarX = playerLane === 0 ? r.lane0 : r.lane1;
+  }
+}
+
+canvas.addEventListener('touchstart', (e) => {
+  e.preventDefault();
+  handleTap();
+}, { passive: false });
+
+canvas.addEventListener('click', handleTap);
+
+window.addEventListener('keydown', (e) => {
+  if (['ArrowLeft','ArrowRight','ArrowUp',' ','Enter'].includes(e.key)) {
+    e.preventDefault();
+    handleTap();
+  }
+});
+
+// ─── Game Loop ───────────────────────────────────────────────────────────────
+
+function loop() {
+  frame++;
+  if (gameState === 'playing') update();
+  else roadOffset += 1.5;    // animate road in menu/gameover background
+  draw();
+  requestAnimationFrame(loop);
+}
+
+// ─── Boot ────────────────────────────────────────────────────────────────────
+gameState = 'menu';
+initGame();
+loop();
+</script>
+</body>
+</html>
