@@ -153,6 +153,7 @@ const NIGHT_DURATION_FRAMES = 300;
 const NIGHT_BLINK_FRAMES = 7;
 const COLOR_SWIPE_MIN_FRAC = 0.055;
 const MISSION_MODAL_MIN_MS = 600;
+const MISSION_SYMBOL_ANIM_MS = 760;
 const DREAM_LERP = 0.24;
 const DREAM_SCROLL_SPEED = 5.3;
 const DREAM_COIN_PATH_INTERVAL = 78;
@@ -1519,7 +1520,22 @@ function drawHUD() {
   drawSaintRingStatus();
 }
 
-function drawMissionSymbol(centerX, centerY, radius, activeColors = []) {
+function easeOutBack(t) {
+  const c1 = 1.70158;
+  const c3 = c1 + 1;
+  return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
+}
+
+function clamp01(value) {
+  return Math.max(0, Math.min(1, value));
+}
+
+function modalAnimationProgress() {
+  if (!missionModalShownAt) return 1;
+  return clamp01((performance.now() - missionModalShownAt) / MISSION_SYMBOL_ANIM_MS);
+}
+
+function drawMissionSymbol(centerX, centerY, radius, activeColors = [], animatingColor = null) {
   const activeSet = new Set(activeColors);
   const gap = radius * 2.35;
   const positions = {
@@ -1543,22 +1559,27 @@ function drawMissionSymbol(centerX, centerY, radius, activeColors = []) {
     const pos = positions[color];
     const unlocked = activeSet.has(color);
     const fillColor = color === 'white' ? '#f7f6ef' : palette.body;
-    const strokeColor = unlocked ? fillColor : 'rgba(255,255,255,0.50)';
+    const revealProgress = color === animatingColor ? modalAnimationProgress() : 1;
+    const easedProgress = easeOutBack(revealProgress);
+    const lit = unlocked && revealProgress > 0.04;
+    const strokeColor = lit ? fillColor : 'rgba(255,255,255,0.50)';
+    const dotScale = unlocked ? 0.92 + 0.10 * easedProgress : 0.92;
+    const glow = unlocked ? revealProgress : 0;
 
-    ctx.globalAlpha = unlocked ? 1 : 0.74;
-    ctx.shadowColor = unlocked ? alphaHex(fillColor, color === 'white' ? 0.72 : 0.64) : 'transparent';
-    ctx.shadowBlur = unlocked ? radius * 1.05 : 0;
-    ctx.fillStyle = unlocked ? fillColor : 'rgba(255,255,255,0.035)';
+    ctx.globalAlpha = lit ? 0.50 + 0.50 * revealProgress : 0.74;
+    ctx.shadowColor = lit ? alphaHex(fillColor, (color === 'white' ? 0.72 : 0.64) * glow) : 'transparent';
+    ctx.shadowBlur = lit ? radius * (0.45 + 0.60 * easedProgress) : 0;
+    ctx.fillStyle = lit ? fillColor : 'rgba(255,255,255,0.035)';
     ctx.strokeStyle = strokeColor;
-    ctx.lineWidth = unlocked ? Math.max(2, radius * 0.28) : Math.max(1, radius * 0.18);
+    ctx.lineWidth = lit ? Math.max(2, radius * (0.18 + 0.10 * easedProgress)) : Math.max(1, radius * 0.18);
     ctx.beginPath();
-    ctx.arc(pos.x, pos.y, unlocked ? radius * 1.02 : radius * 0.92, 0, Math.PI * 2);
+    ctx.arc(pos.x, pos.y, radius * dotScale, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
 
-    if (unlocked) {
+    if (lit) {
       ctx.shadowBlur = 0;
-      ctx.globalAlpha = color === 'white' ? 0.60 : 0.42;
+      ctx.globalAlpha = (color === 'white' ? 0.60 : 0.42) * revealProgress;
       ctx.fillStyle = color === 'white' ? '#ffffff' : '#ffffff';
       ctx.beginPath();
       ctx.arc(pos.x - radius * 0.25, pos.y - radius * 0.25, radius * 0.26, 0, Math.PI * 2);
@@ -1798,13 +1819,43 @@ function drawVerticalSwipeIcon(x, y, size) {
   ctx.restore();
 }
 
-function drawMissionModalPanel(r, activeColors, accentColor = '#ffffff') {
+function drawKeyboardKey(x, y, w, h, label) {
+  ctx.save();
+  ctx.fillStyle = 'rgba(255,255,255,0.10)';
+  ctx.strokeStyle = 'rgba(255,255,255,0.82)';
+  ctx.lineWidth = Math.max(1.5, h * 0.06);
+  ctx.beginPath();
+  ctx.roundRect(x - w / 2, y - h / 2, w, h, h * 0.18);
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.font = `bold ${Math.max(10, h * 0.42)}px Arial, sans-serif`;
+  ctx.fillStyle = '#ffffff';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(label, x, y + h * 0.02);
+  ctx.restore();
+}
+
+function drawMissionModalTitle(text, x, y, size, color) {
+  ctx.save();
+  ctx.font = `900 ${size}px "Arial Black", Arial, sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = color;
+  ctx.shadowColor = alphaHex(color, 0.45);
+  ctx.shadowBlur = size * 0.35;
+  ctx.fillText(text, x, y);
+  ctx.restore();
+}
+
+function drawMissionModalPanel(r, title, activeColors, accentColor = '#ffffff', animatingColor = null) {
   ctx.fillStyle = 'rgba(0,0,0,0.68)';
   ctx.fillRect(0, 0, r.W, r.H);
   const cx = r.W / 2;
   const boxW = r.W * 0.68;
-  const boxH = r.H * 0.28;
-  const boxY = r.H * 0.36;
+  const boxH = r.H * 0.32;
+  const boxY = r.H * 0.34;
   ctx.fillStyle = 'rgba(20,24,35,0.96)';
   ctx.strokeStyle = accentColor;
   ctx.lineWidth = 2;
@@ -1813,30 +1864,33 @@ function drawMissionModalPanel(r, activeColors, accentColor = '#ffffff') {
   ctx.fill();
   ctx.stroke();
 
-  drawMissionSymbol(cx, boxY + boxH * 0.22, Math.max(10, r.W * 0.032), activeColors);
+  drawMissionModalTitle(title, cx, boxY + boxH * 0.14, Math.max(13, r.W * 0.043), accentColor);
+  drawMissionSymbol(cx, boxY + boxH * 0.33, Math.max(10, r.W * 0.032), activeColors, animatingColor);
   return { cx, boxW, boxH, boxY };
 }
 
 function drawColorIntroModal(r) {
-  const { cx, boxW, boxH, boxY } = drawMissionModalPanel(r, ['blue'], CAR_PALETTES.blue.body);
-  const carW = boxW * 0.25;
+  const { cx, boxW, boxH, boxY } = drawMissionModalPanel(r, 'color swipe!', ['blue'], CAR_PALETTES.blue.body, 'blue');
+  const carW = boxW * 0.22;
   const carH = carW * 1.85;
-  drawCar(cx - boxW * 0.13, boxY + boxH * 0.62, carW, carH, 'purple');
-  drawVerticalSwipeIcon(cx + boxW * 0.22, boxY + boxH * 0.62, boxH * 0.45);
+  const iconY = boxY + boxH * 0.68;
+  drawCar(cx - boxW * 0.20, iconY, carW, carH, 'purple');
+  drawVerticalSwipeIcon(cx + boxW * 0.05, iconY, boxH * 0.34);
+  drawKeyboardKey(cx + boxW * 0.27, iconY, boxW * 0.24, boxH * 0.16, 'SPACE');
 }
 
 function drawSaintRingMissionModal(r) {
-  const { cx, boxW, boxH, boxY } = drawMissionModalPanel(r, ['blue', 'white'], '#f7f6ef');
+  const { cx, boxW, boxH, boxY } = drawMissionModalPanel(r, 'saint ring!', ['blue', 'white'], '#f7f6ef', 'white');
   const carW = boxW * 0.23;
   const carH = carW * 1.85;
-  const carY = boxY + boxH * 0.64;
+  const carY = boxY + boxH * 0.69;
   drawCar(cx, carY, carW, carH, 'white');
   drawSaintRing(cx, carY - carH * 0.56, carW * 1.08, 1);
 }
 
 function drawSpaceMissionModal(r) {
-  const { cx, boxH, boxY } = drawMissionModalPanel(r, ['blue', 'white', 'purple'], CAR_PALETTES.purple.body);
-  const portalY = boxY + boxH * 0.64;
+  const { cx, boxH, boxY } = drawMissionModalPanel(r, 'hyperspace!', ['blue', 'white', 'purple'], CAR_PALETTES.purple.body, 'purple');
+  const portalY = boxY + boxH * 0.69;
   drawPortal(cx, portalY, boxH * 0.23, 'purple', 7301);
 }
 
@@ -2012,6 +2066,13 @@ function colorSwipeDirection(start, end) {
   return dy < 0 ? 1 : -1;
 }
 
+function isTouchGesture(start, end) {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const minDist = Math.max(18, canvas.height * 0.024);
+  return Math.hypot(dx, dy) >= minDist;
+}
+
 function handlePointerPress(point) {
   if (gameState === 'paused') {
     handleTap();
@@ -2044,9 +2105,9 @@ function handleTouchEnd(start, end) {
       setDreamTargetX(end.x);
       return;
     }
-    const swipeDirection = colorSwipeDirection(start, end);
-    if (swipeDirection !== 0 && colorFeatureUnlocked()) {
-      cycleCarColor(swipeDirection);
+    if (isTouchGesture(start, end)) {
+      const swipeDirection = colorSwipeDirection(start, end);
+      if (swipeDirection !== 0 && colorFeatureUnlocked()) cycleCarColor(swipeDirection);
       return;
     }
     moveByScreenSide(end);
@@ -2062,7 +2123,6 @@ canvas.addEventListener('touchstart', (e) => {
     setDreamTargetX(touchStartPoint.x);
     return;
   }
-  reverseLaneChangeFromPoint(touchStartPoint);
 }, { passive: false });
 
 canvas.addEventListener('touchmove', (e) => {
@@ -2119,9 +2179,9 @@ window.addEventListener('blur', () => {
 });
 
 window.addEventListener('keydown', (e) => {
-  if (e.key === ' ' && gameState === 'playing' && !dreamHighway && colorFeatureUnlocked()) {
+  if (e.key === ' ') {
     e.preventDefault();
-    cycleCarColor();
+    if (gameState === 'playing' && !dreamHighway && colorFeatureUnlocked()) cycleCarColor();
     return;
   }
 
@@ -2141,7 +2201,7 @@ window.addEventListener('keydown', (e) => {
     return;
   }
 
-  if (['ArrowUp',' ','Enter'].includes(e.key)) {
+  if (['ArrowUp','Enter'].includes(e.key)) {
     e.preventDefault();
     handleTap();
   }
