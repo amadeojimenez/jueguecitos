@@ -31,7 +31,7 @@
 const canvas = document.getElementById('gameCanvas');
 const ctx    = canvas.getContext('2d');
 // increase this version in any change in the code
-const GAME_VERSION = 'v0.5.1';
+const GAME_VERSION = 'v0.5.4';
 
 function resize() {
   // Portrait 9:16 ratio, fill the viewport
@@ -130,6 +130,9 @@ const COIN_SPAWN_PROBABILITY = 0.28;
 const MAX_SAME_LANE_OBSTACLES = 3;
 const SPEED_RAMP_BONUS   = 0.27;
 const COIN_SPEED_BONUS   = 0.30;
+const SPECIAL_COIN_SCORE = 50;
+const SPECIAL_COIN_SPEED_BONUS = 1.20;
+const SPECIAL_COIN_PROBABILITY = 0.2;
 const MAX_SPEED          = 16;
 const OPPOSING_OBSTACLE_GAP_MULT = 1.3;
 const COLOR_UNLOCK_SCORE = 200;
@@ -163,6 +166,7 @@ const ASSET_PATHS = {
   car_purple: 'img/car_purple.png',
   obstacle_red: 'img/obstacle_red.png',
   ufo: 'img/ufo.png',
+  coin_basic: 'img/coin_basic.png',
   coin_red: 'img/coin_red.png',
   grass_dot: 'img/grass_dot.png'
 };
@@ -180,6 +184,13 @@ function loadGameAssets() {
 function spriteReady(name) {
   const image = sprites[name];
   return image && image.complete && image.naturalWidth > 0;
+}
+
+function spriteAspect(name, fallback = 1) {
+  const image = sprites[name];
+  return image && image.naturalWidth > 0 && image.naturalHeight > 0
+    ? image.naturalWidth / image.naturalHeight
+    : fallback;
 }
 
 const CAR_PALETTES = {
@@ -230,7 +241,7 @@ function initGame() {
   roadOffset = 0;
   scoreTimer = 0;
   spawnTimer = 0;
-  spawnInterval = 94;
+  spawnInterval = 88;
   diffTimer  = 0;
   portalTimer = 0;
   portalInterval = randomPortalInterval();
@@ -352,6 +363,7 @@ function spawnDreamCoinPath() {
   const phase = Math.random() * Math.PI * 2;
   const wave = dreamWaveId++;
   const size = r.W * 0.052;
+  const specialIndex = isSpecialCoin() ? Math.floor(Math.random() * count) : -1;
 
   for (let i = 0; i < count; i++) {
     const curve = Math.sin(i * 0.78 + phase);
@@ -361,8 +373,9 @@ function spawnDreamCoinPath() {
       y: baseY - i * spacing,
       type: 'collect',
       size,
+      special: i === specialIndex,
       vx: Math.sin(phase + i * 0.34) * 0.22,
-      vy: DREAM_SCROLL_SPEED * 0.92,
+      vy: speed * 0.92,
       driftPhase: phase + i * 0.50,
       driftAmp: r.W * 0.010,
       wave
@@ -379,7 +392,7 @@ function spawnDreamUfo() {
   const targetX = r.W * (0.18 + Math.random() * 0.64);
   const travelFrames = 70 + Math.random() * 52;
   const vx = (targetX - x) / travelFrames;
-  const vy = DREAM_SCROLL_SPEED * (0.82 + Math.random() * 0.42);
+  const vy = speed * (0.82 + Math.random() * 0.42);
 
   objects.push({
     x,
@@ -398,7 +411,7 @@ function spawnDreamUfo() {
 
 function updateDreamHighway() {
   carX += (targetCarX - carX) * DREAM_LERP;
-  roadOffset += DREAM_SCROLL_SPEED;
+  roadOffset += speed;
 
   if (++scoreTimer >= 30) { addScore(1); scoreTimer = 0; }
 
@@ -416,7 +429,7 @@ function updateDreamHighway() {
 
   for (let i = objects.length - 1; i >= 0; i--) {
     const obj = objects[i];
-    obj.y += obj.vy || DREAM_SCROLL_SPEED;
+    obj.y += obj.vy || speed;
     obj.x += obj.vx || 0;
     if (typeof obj.driftPhase === 'number') {
       obj.driftPhase += 0.055;
@@ -439,16 +452,7 @@ function updateDreamHighway() {
         return;
       }
       if (obj.type === 'collect') {
-        effects.push({
-          x: obj.x,
-          y: obj.y,
-          type: 'coinPop',
-          size: obj.size,
-          color: 'purple',
-          age: 0,
-          duration: 22
-        });
-        addScore(10);
+        collectCoin(obj);
         objects.splice(i, 1);
       }
     }
@@ -497,6 +501,25 @@ function registerCollectedCoin(hadSaintRing) {
   if (purpleRingCoinStreak >= PURPLE_RING_COIN_STREAK) {
     completeMission('purple');
   }
+}
+
+function isSpecialCoin() {
+  return Math.random() < SPECIAL_COIN_PROBABILITY;
+}
+
+function collectCoin(obj, hadSaintRing = false) {
+  effects.push({
+    x: obj.x,
+    y: obj.y,
+    type: 'coinPop',
+    size: obj.size,
+    color: obj.special ? 'red' : selectedCarColor,
+    age: 0,
+    duration: obj.special ? 30 : 22
+  });
+  addScore(obj.special ? SPECIAL_COIN_SCORE : 10);
+  if (hadSaintRing) registerCollectedCoin(hadSaintRing);
+  speed = Math.min(speed + (obj.special ? SPECIAL_COIN_SPEED_BONUS : COIN_SPEED_BONUS), MAX_SPEED);
 }
 
 function collapsePortal(portal) {
@@ -575,7 +598,7 @@ function spawnObject() {
   }
 
   const x = lane === 0 ? r.lane0 : r.lane1;
-  objects.push({ x, y, type, size, lane });
+  objects.push({ x, y, type, size, lane, special: type === 'collect' && isSpecialCoin() });
   if (type === 'obstacle') registerObstacleLane(lane);
 }
 
@@ -666,18 +689,7 @@ function update() {
         return;
       } else if (objects[i].type === 'collect') {
         const hadSaintRing = saintRing;
-        effects.push({
-          x: objects[i].x,
-          y: objects[i].y,
-          type: 'coinPop',
-          size: objects[i].size,
-          color: selectedCarColor,
-          age: 0,
-          duration: 22
-        });
-        addScore(10);
-        registerCollectedCoin(hadSaintRing);
-        speed = Math.min(speed + COIN_SPEED_BONUS, MAX_SPEED);
+        collectCoin(objects[i], hadSaintRing);
         objects.splice(i, 1);
       } else if (objects[i].type === 'portal') {
         if (selectedCarColor !== objects[i].color) {
@@ -1106,22 +1118,23 @@ function drawUfo(x, y, size, rotation = 0, seed = 0) {
   ctx.restore();
 }
 
-function drawCoin(x, y, size) {
-  // Collectible uses the obstacle style, but as a circle instead of a diamond.
+function drawCoin(x, y, size, special = false) {
+  // Basic coins use coin_basic.png; rare special coins keep the animated red sprite.
   const theme = currentTheme();
-  const pulse = 1 + Math.sin((frame + y) * 0.08) * 0.055;
-  const glow = 0.50 + Math.sin((frame + y) * 0.11) * 0.20;
-
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.globalAlpha = glow;
-  ctx.fillStyle = theme.coin0;
-  ctx.shadowColor = theme.coin0;
-  ctx.shadowBlur = size * 0.55;
-  ctx.beginPath();
-  ctx.arc(0, 0, size * 0.58 * pulse, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.restore();
+  const pulse = special ? 1 + Math.sin((frame + y) * 0.08) * 0.075 : 1;
+  if (special) {
+    const glow = 0.58 + Math.sin((frame + y) * 0.11) * 0.24;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.globalAlpha = glow;
+    ctx.fillStyle = '#ff453a';
+    ctx.shadowColor = '#ff453a';
+    ctx.shadowBlur = size * 0.68;
+    ctx.beginPath();
+    ctx.arc(0, 0, size * 0.66 * pulse, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
 
   if (saintRing) {
     const ringPulse = 1 + Math.sin((frame + y) * 0.12) * 0.04;
@@ -1145,7 +1158,10 @@ function drawCoin(x, y, size) {
     ctx.restore();
   }
 
-  if (drawSprite('coin_red', x, y, size * 1.66 * pulse, size * 1.10 * pulse, {
+  const spriteName = special ? 'coin_red' : 'coin_basic';
+  const spriteH = size * 1.10 * pulse;
+  const spriteW = special ? size * 1.66 * pulse : spriteH * spriteAspect('coin_basic', 668 / 685);
+  if (drawSprite(spriteName, x, y, spriteW, spriteH, {
     shadowColor: 'rgba(0,0,0,0.38)',
     shadowBlur: size * 0.18,
     shadowOffsetY: size * 0.10
@@ -1162,8 +1178,8 @@ function drawCoin(x, y, size) {
   ctx.shadowColor = 'rgba(0,0,0,0.34)';
   ctx.shadowBlur = size * 0.18;
   ctx.shadowOffsetY = size * 0.10;
-  ctx.fillStyle   = theme.obstacle;
-  ctx.strokeStyle = theme.obstacleStroke;
+  ctx.fillStyle   = special ? theme.obstacle : theme.coin1;
+  ctx.strokeStyle = special ? theme.obstacleStroke : theme.coinStroke;
   ctx.lineWidth   = 2.5;
   ctx.beginPath();
   ctx.arc(0, 0, s, 0, Math.PI * 2);
@@ -1175,8 +1191,8 @@ function drawCoin(x, y, size) {
   ctx.shadowOffsetY = 0;
   const coinGradient = ctx.createRadialGradient(-s * 0.18, -s * 0.22, s * 0.12, 0, 0, s * 0.55);
   coinGradient.addColorStop(0, theme.coinStar);
-  coinGradient.addColorStop(0.45, theme.coin0);
-  coinGradient.addColorStop(1, theme.coin1);
+  coinGradient.addColorStop(0.45, special ? theme.obstacleStroke : theme.coin0);
+  coinGradient.addColorStop(1, special ? theme.obstacle : theme.coin1);
   ctx.fillStyle = coinGradient;
   ctx.beginPath();
   ctx.arc(0, 0, s * 0.45, 0, Math.PI * 2);
@@ -1209,26 +1225,31 @@ function drawPortalCollapse(effect) {
 
 function drawCoinPop(effect) {
   const theme = currentTheme();
+  const special = effect.color === 'red';
   const progress = Math.min(effect.age / effect.duration, 1);
   const eased = 1 - Math.pow(1 - progress, 2);
   const alpha = 1 - progress;
-  const radius = effect.size * (0.50 + eased * 1.15);
+  const radius = effect.size * (0.50 + eased * (special ? 1.75 : 1.15));
 
   ctx.save();
   ctx.translate(effect.x, effect.y - progress * effect.size * 0.5);
   ctx.globalAlpha = alpha;
-  ctx.strokeStyle = theme.hudAccent;
+  ctx.strokeStyle = special ? '#ff453a' : theme.hudAccent;
   ctx.lineWidth = Math.max(2, effect.size * 0.06 * alpha);
+  ctx.shadowColor = special ? 'rgba(255,69,58,0.75)' : 'transparent';
+  ctx.shadowBlur = special ? effect.size * 0.30 : 0;
   ctx.beginPath();
   ctx.arc(0, 0, radius, 0, Math.PI * 2);
   ctx.stroke();
 
-  ctx.fillStyle = theme.coinStar;
-  for (let i = 0; i < 5; i++) {
-    const angle = (Math.PI * 2 / 5) * i + progress * 0.8;
-    const sparkR = effect.size * (0.25 + progress * 0.85);
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = special ? '#fff296' : theme.coinStar;
+  const sparkCount = special ? 8 : 5;
+  for (let i = 0; i < sparkCount; i++) {
+    const angle = (Math.PI * 2 / sparkCount) * i + progress * (special ? 1.25 : 0.8);
+    const sparkR = effect.size * (0.25 + progress * (special ? 1.15 : 0.85));
     ctx.beginPath();
-    ctx.arc(Math.cos(angle) * sparkR, Math.sin(angle) * sparkR, effect.size * 0.055 * alpha, 0, Math.PI * 2);
+    ctx.arc(Math.cos(angle) * sparkR, Math.sin(angle) * sparkR, effect.size * (special ? 0.070 : 0.055) * alpha, 0, Math.PI * 2);
     ctx.fill();
   }
   ctx.restore();
@@ -1884,7 +1905,7 @@ function draw() {
   for (const obj of objects) {
     if (obj.type === 'obstacle') drawObstacle(obj.x, obj.y, obj.size);
     else if (obj.type === 'ufo') drawUfo(obj.x, obj.y, obj.size, obj.rotation || 0, obj.seed || 0);
-    else if (obj.type === 'collect') drawCoin(obj.x, obj.y, obj.size);
+    else if (obj.type === 'collect') drawCoin(obj.x, obj.y, obj.size, !!obj.special);
     else if (obj.type === 'portal')  drawPortal(obj.x, obj.y, obj.size, obj.color, obj.seed);
   }
 
