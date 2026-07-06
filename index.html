@@ -31,7 +31,7 @@
 const canvas = document.getElementById('gameCanvas');
 const ctx    = canvas.getContext('2d');
 // increase this version in any change in the code
-const GAME_VERSION = 'v0.4.5';
+const GAME_VERSION = 'v0.5.1';
 
 function resize() {
   // Portrait 9:16 ratio, fill the viewport
@@ -48,8 +48,14 @@ function resize() {
   // Re-snap car after resize if already playing
   if (typeof carX !== 'undefined') {
     const r = roadMetrics();
-    targetCarX = playerLane === 0 ? r.lane0 : r.lane1;
-    carX = targetCarX;
+    if (typeof dreamHighway !== 'undefined' && dreamHighway) {
+      const margin = r.W * 0.13;
+      targetCarX = Math.max(margin, Math.min(r.W - margin, targetCarX));
+      carX = Math.max(margin, Math.min(r.W - margin, carX));
+    } else {
+      targetCarX = playerLane === 0 ? r.lane0 : r.lane1;
+      carX = targetCarX;
+    }
   }
 }
 window.addEventListener('resize', resize);
@@ -103,10 +109,13 @@ let portalTimer, portalInterval;
 let nightTimer, nightInterval, nightPhaseTimer, nightPhase;
 let selectedCarColor, activeWorld;
 let saintRing, whiteWorldPoints;
-let colorIntroSeen, colorIntroShownAt, pauseReason;
+let missionUnlocked, purpleRingCoinStreak;
+let dreamHighway, dreamSpawnTimer, dreamPathTimer, dreamWaveId;
+let colorIntroSeen, missionModalShownAt, pauseReason;
 let lastObstacleLane, sameLaneObstacleCount;
 let lastTouchTime = 0;
 let touchStartPoint = null;
+let mouseSteeringActive = false;
 
 resize();
 
@@ -116,7 +125,7 @@ const devMode = queryParams.get('mode') === 'dev';
 const CAR_Y_FRAC          = 0.78;
 const LANE_LERP           = 0.14;
 // Empty slots give the road occasional breathing room. Remaining slots are 28% coins.
-const EMPTY_SPAWN_PROBABILITY = 0.1;
+const EMPTY_SPAWN_PROBABILITY = 0.05;
 const COIN_SPAWN_PROBABILITY = 0.28;
 const MAX_SAME_LANE_OBSTACLES = 3;
 const SPEED_RAMP_BONUS   = 0.27;
@@ -125,8 +134,10 @@ const MAX_SPEED          = 16;
 const OPPOSING_OBSTACLE_GAP_MULT = 1.3;
 const COLOR_UNLOCK_SCORE = 200;
 const SAINT_RING_SCORE = 100;
+const PURPLE_RING_COIN_STREAK = 20;
 const COLOR_ORDER        = ['blue', 'white', 'purple'];
 const devWorld = devMode && COLOR_ORDER.includes(requestedDevWorld) ? requestedDevWorld : null;
+const devSpace = devMode && requestedDevWorld === 'space';
 const PORTAL_MIN_INTERVAL = 120;
 const PORTAL_MAX_INTERVAL = 420;
 const PORTAL_SCORE_BONUS = 50;
@@ -138,7 +149,11 @@ const NIGHT_WARNING_FRAMES = 180;
 const NIGHT_DURATION_FRAMES = 300;
 const NIGHT_BLINK_FRAMES = 7;
 const COLOR_SWIPE_MIN_FRAC = 0.055;
-const COLOR_INTRO_MIN_MS = 600;
+const MISSION_MODAL_MIN_MS = 600;
+const DREAM_LERP = 0.24;
+const DREAM_SCROLL_SPEED = 5.3;
+const DREAM_COIN_PATH_INTERVAL = 78;
+const DREAM_UFO_INTERVAL = 54;
 // Hitbox is smaller than the visual to feel fair when near-missing
 const COLLISION_SCALE     = 0.65;
 
@@ -147,6 +162,7 @@ const ASSET_PATHS = {
   car_white: 'img/car_white.png',
   car_purple: 'img/car_purple.png',
   obstacle_red: 'img/obstacle_red.png',
+  ufo: 'img/ufo.png',
   coin_red: 'img/coin_red.png',
   grass_dot: 'img/grass_dot.png'
 };
@@ -214,7 +230,7 @@ function initGame() {
   roadOffset = 0;
   scoreTimer = 0;
   spawnTimer = 0;
-  spawnInterval = 104;
+  spawnInterval = 94;
   diffTimer  = 0;
   portalTimer = 0;
   portalInterval = randomPortalInterval();
@@ -223,14 +239,29 @@ function initGame() {
   nightPhaseTimer = 0;
   nightPhase = 'idle';
   colorIntroSeen = devMode;
-  colorIntroShownAt = 0;
+  missionModalShownAt = 0;
   pauseReason = null;
   selectedCarColor = devWorld || 'blue';
   activeWorld = devWorld || 'blue';
   saintRing = false;
   whiteWorldPoints = 0;
+  missionUnlocked = {
+    blue: colorFeatureUnlocked(),
+    white: false,
+    purple: false
+  };
+  purpleRingCoinStreak = 0;
+  dreamHighway = false;
+  dreamSpawnTimer = 0;
+  dreamPathTimer = 0;
+  dreamWaveId = 0;
   lastObstacleLane = null;
   sameLaneObstacleCount = 0;
+
+  if (devSpace) {
+    missionUnlocked = { blue: true, white: true, purple: true };
+    startDreamHighway();
+  }
 }
 
 function randomPortalInterval() {
@@ -255,12 +286,14 @@ function setActiveWorld(world) {
 
 function addScore(points) {
   score += points;
+  if (colorFeatureUnlocked()) completeMission('blue');
   if (activeWorld !== 'white' || saintRing) return;
 
   whiteWorldPoints += points;
   if (whiteWorldPoints >= SAINT_RING_SCORE) {
     saintRing = true;
     whiteWorldPoints = 0;
+    completeMission('white');
     effects.push({
       x: carX,
       y: carDims().carY,
@@ -269,6 +302,156 @@ function addScore(points) {
       age: 0,
       duration: 42
     });
+  }
+}
+
+function completeMission(color) {
+  if (!missionUnlocked || missionUnlocked[color]) return;
+  missionUnlocked[color] = true;
+  if (color === 'white') showMissionModal('whiteMission');
+  if (color === 'purple') showMissionModal('purpleMission');
+}
+
+function showMissionModal(reason) {
+  pauseReason = reason;
+  missionModalShownAt = performance.now();
+  gameState = 'paused';
+}
+
+function clampDreamX(x) {
+  const r = roadMetrics();
+  const margin = r.W * 0.13;
+  return Math.max(margin, Math.min(r.W - margin, x));
+}
+
+function startDreamHighway() {
+  const r = roadMetrics();
+  dreamHighway = true;
+  dreamSpawnTimer = 0;
+  dreamPathTimer = DREAM_COIN_PATH_INTERVAL - 18;
+  dreamWaveId = 0;
+  activeWorld = 'purple';
+  selectedCarColor = 'purple';
+  saintRing = false;
+  whiteWorldPoints = 0;
+  speed = DREAM_SCROLL_SPEED;
+  objects = [];
+  effects = [];
+  resetNightEffect();
+  carX = clampDreamX(r.centerX);
+  targetCarX = carX;
+}
+
+function spawnDreamCoinPath() {
+  const r = roadMetrics();
+  const count = 9;
+  const baseY = -r.H * 0.08;
+  const spacing = r.H * 0.060;
+  const amplitude = r.W * (0.18 + Math.random() * 0.10);
+  const center = r.W * (0.37 + Math.random() * 0.26);
+  const phase = Math.random() * Math.PI * 2;
+  const wave = dreamWaveId++;
+  const size = r.W * 0.052;
+
+  for (let i = 0; i < count; i++) {
+    const curve = Math.sin(i * 0.78 + phase);
+    const x = Math.max(r.W * 0.14, Math.min(r.W * 0.86, center + curve * amplitude));
+    objects.push({
+      x,
+      y: baseY - i * spacing,
+      type: 'collect',
+      size,
+      vx: Math.sin(phase + i * 0.34) * 0.22,
+      vy: DREAM_SCROLL_SPEED * 0.92,
+      driftPhase: phase + i * 0.50,
+      driftAmp: r.W * 0.010,
+      wave
+    });
+  }
+}
+
+function spawnDreamUfo() {
+  const r = roadMetrics();
+  const fromLeft = Math.random() < 0.5;
+  const size = r.W * (0.052 + Math.random() * 0.018);
+  const y = -size * (1.2 + Math.random() * 3.5);
+  const x = fromLeft ? -size * 1.4 : r.W + size * 1.4;
+  const targetX = r.W * (0.18 + Math.random() * 0.64);
+  const travelFrames = 70 + Math.random() * 52;
+  const vx = (targetX - x) / travelFrames;
+  const vy = DREAM_SCROLL_SPEED * (0.82 + Math.random() * 0.42);
+
+  objects.push({
+    x,
+    y,
+    type: 'ufo',
+    size,
+    vx,
+    vy,
+    rotation: Math.random() * Math.PI * 2,
+    spin: (Math.random() < 0.5 ? -1 : 1) * (0.018 + Math.random() * 0.018),
+    driftPhase: Math.random() * Math.PI * 2,
+    driftAmp: r.W * (0.010 + Math.random() * 0.015),
+    seed: Math.floor(Math.random() * 100000)
+  });
+}
+
+function updateDreamHighway() {
+  carX += (targetCarX - carX) * DREAM_LERP;
+  roadOffset += DREAM_SCROLL_SPEED;
+
+  if (++scoreTimer >= 30) { addScore(1); scoreTimer = 0; }
+
+  if (++dreamPathTimer >= DREAM_COIN_PATH_INTERVAL) {
+    spawnDreamCoinPath();
+    dreamPathTimer = 0;
+  }
+
+  if (++dreamSpawnTimer >= DREAM_UFO_INTERVAL) {
+    spawnDreamUfo();
+    dreamSpawnTimer = 0;
+  }
+
+  updateEffects();
+
+  for (let i = objects.length - 1; i >= 0; i--) {
+    const obj = objects[i];
+    obj.y += obj.vy || DREAM_SCROLL_SPEED;
+    obj.x += obj.vx || 0;
+    if (typeof obj.driftPhase === 'number') {
+      obj.driftPhase += 0.055;
+      obj.x += Math.sin(obj.driftPhase) * (obj.driftAmp || 0);
+    }
+    if (typeof obj.rotation === 'number') obj.rotation += obj.spin || 0;
+
+    if (
+      obj.y > canvas.height + obj.size * 2 ||
+      obj.x < -obj.size * 4 ||
+      obj.x > canvas.width + obj.size * 4
+    ) {
+      objects.splice(i, 1);
+      continue;
+    }
+
+    if (collides(obj)) {
+      if (obj.type === 'ufo') {
+        endGame();
+        return;
+      }
+      if (obj.type === 'collect') {
+        effects.push({
+          x: obj.x,
+          y: obj.y,
+          type: 'coinPop',
+          size: obj.size,
+          color: 'purple',
+          age: 0,
+          duration: 22
+        });
+        addScore(10);
+        objects.splice(i, 1);
+      }
+    }
   }
 }
 
@@ -292,6 +475,7 @@ function endGame() {
 function breakSaintRing(obj) {
   saintRing = false;
   whiteWorldPoints = 0;
+  purpleRingCoinStreak = 0;
   effects.push({
     x: obj.x,
     y: obj.y,
@@ -300,6 +484,19 @@ function breakSaintRing(obj) {
     age: 0,
     duration: 34
   });
+}
+
+function registerMissedCoin() {
+  if (!saintRing || missionUnlocked.purple) return;
+  purpleRingCoinStreak = 0;
+}
+
+function registerCollectedCoin(hadSaintRing) {
+  if (!hadSaintRing || missionUnlocked.purple) return;
+  purpleRingCoinStreak++;
+  if (purpleRingCoinStreak >= PURPLE_RING_COIN_STREAK) {
+    completeMission('purple');
+  }
 }
 
 function collapsePortal(portal) {
@@ -318,7 +515,8 @@ function collapsePortal(portal) {
 // ─── Car Dimensions (top-down view) ─────────────────────────────────────────
 function carDims() {
   const r   = roadMetrics();
-  const carW = r.laneW * 0.52;
+  const carScale = dreamHighway ? 0.26 : 0.52;
+  const carW = r.laneW * carScale;
   const carH = carW * 1.85;
   const carY = canvas.height * CAR_Y_FRAC;
   return { carW, carH, carY };
@@ -411,6 +609,11 @@ function collides(obj) {
 
 // ─── Update ──────────────────────────────────────────────────────────────────
 function update() {
+  if (dreamHighway) {
+    updateDreamHighway();
+    return;
+  }
+
   maybeShowColorIntro();
   updateNightEffect();
 
@@ -448,6 +651,7 @@ function update() {
   for (let i = objects.length - 1; i >= 0; i--) {
     objects[i].y += speed;
     if (objects[i].y > canvas.height + objects[i].size * 2) {
+      if (objects[i].type === 'collect') registerMissedCoin();
       objects.splice(i, 1);
       continue;
     }
@@ -461,6 +665,7 @@ function update() {
         endGame();
         return;
       } else if (objects[i].type === 'collect') {
+        const hadSaintRing = saintRing;
         effects.push({
           x: objects[i].x,
           y: objects[i].y,
@@ -471,6 +676,7 @@ function update() {
           duration: 22
         });
         addScore(10);
+        registerCollectedCoin(hadSaintRing);
         speed = Math.min(speed + COIN_SPEED_BONUS, MAX_SPEED);
         objects.splice(i, 1);
       } else if (objects[i].type === 'portal') {
@@ -498,14 +704,12 @@ function updateEffects() {
 function maybeShowColorIntro() {
   if (!colorIntroSeen && colorFeatureUnlocked()) {
     colorIntroSeen = true;
-    colorIntroShownAt = performance.now();
-    pauseReason = 'colorIntro';
-    gameState = 'paused';
+    showMissionModal('colorIntro');
   }
 }
 
-function canCloseColorIntro() {
-  return pauseReason !== 'colorIntro' || performance.now() - colorIntroShownAt >= COLOR_INTRO_MIN_MS;
+function canCloseMissionModal() {
+  return performance.now() - missionModalShownAt >= MISSION_MODAL_MIN_MS;
 }
 
 function resetNightEffect() {
@@ -686,6 +890,50 @@ function drawRoad(r) {
   ctx.shadowBlur = 0;
 }
 
+function drawSpaceBackground(r) {
+  const sky = ctx.createLinearGradient(0, 0, 0, r.H);
+  sky.addColorStop(0, '#03020a');
+  sky.addColorStop(0.45, '#100724');
+  sky.addColorStop(1, '#05030d');
+  ctx.fillStyle = sky;
+  ctx.fillRect(0, 0, r.W, r.H);
+
+  const starLayers = [
+    { count: 58, speed: 0.20, alpha: 0.42, size: 0.004 },
+    { count: 36, speed: 0.46, alpha: 0.66, size: 0.006 },
+    { count: 18, speed: 0.82, alpha: 0.86, size: 0.008 }
+  ];
+
+  ctx.save();
+  for (let layer = 0; layer < starLayers.length; layer++) {
+    const config = starLayers[layer];
+    for (let i = 0; i < config.count; i++) {
+      const seed = layer * 1009 + i * 37 + 13;
+      const x = pseudoRandom(seed) * r.W;
+      const y = (pseudoRandom(seed + 5) * r.H + roadOffset * config.speed) % r.H;
+      const twinkle = 0.64 + Math.sin(frame * 0.025 + seed) * 0.36;
+      const radius = Math.max(0.7, r.W * config.size * (0.55 + pseudoRandom(seed + 9) * 0.85));
+      ctx.globalAlpha = config.alpha * twinkle;
+      ctx.fillStyle = pseudoRandom(seed + 17) > 0.72 ? '#d8b6ff' : '#ffffff';
+      ctx.beginPath();
+      ctx.arc(x, y, radius, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  ctx.globalAlpha = 0.16;
+  ctx.strokeStyle = '#8d4dff';
+  ctx.lineWidth = Math.max(1, r.W * 0.004);
+  for (let i = 0; i < 4; i++) {
+    const y = (r.H * (0.18 + i * 0.24) + roadOffset * 0.16) % (r.H * 1.2) - r.H * 0.1;
+    ctx.beginPath();
+    ctx.moveTo(-r.W * 0.10, y);
+    ctx.bezierCurveTo(r.W * 0.25, y - r.H * 0.08, r.W * 0.68, y + r.H * 0.12, r.W * 1.10, y);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
 function drawDreamCloud(x, y, size) {
   ctx.save();
   ctx.translate(x, y);
@@ -791,6 +1039,73 @@ function drawObstacle(x, y, size) {
   ctx.restore();
 }
 
+function drawUfo(x, y, size, rotation = 0, seed = 0) {
+  const wobble = Math.sin(frame * 0.08 + seed) * size * 0.08;
+  if (drawSprite('ufo', x, y + wobble, size * 1.9, size * 1.35, {
+    rotation,
+    shadowColor: 'rgba(216,182,255,0.46)',
+    shadowBlur: size * 0.24,
+    shadowOffsetY: size * 0.08
+  })) {
+    return;
+  }
+
+  ctx.save();
+  ctx.translate(x, y + wobble);
+  ctx.rotate(rotation);
+
+  ctx.fillStyle = 'rgba(0,0,0,0.34)';
+  ctx.beginPath();
+  ctx.ellipse(size * 0.08, size * 0.34, size * 0.86, size * 0.20, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  const beamAlpha = 0.16 + Math.sin(frame * 0.06 + seed) * 0.05;
+  const beam = ctx.createLinearGradient(0, size * 0.10, 0, size * 1.18);
+  beam.addColorStop(0, `rgba(216,182,255,${beamAlpha})`);
+  beam.addColorStop(1, 'rgba(216,182,255,0)');
+  ctx.fillStyle = beam;
+  ctx.beginPath();
+  ctx.moveTo(-size * 0.28, size * 0.08);
+  ctx.lineTo(size * 0.28, size * 0.08);
+  ctx.lineTo(size * 0.58, size * 1.08);
+  ctx.lineTo(-size * 0.58, size * 1.08);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.shadowColor = 'rgba(216,182,255,0.65)';
+  ctx.shadowBlur = size * 0.24;
+  ctx.fillStyle = '#d8b6ff';
+  ctx.beginPath();
+  ctx.ellipse(0, -size * 0.14, size * 0.38, size * 0.28, 0, Math.PI, Math.PI * 2);
+  ctx.fill();
+
+  ctx.shadowColor = 'rgba(0,0,0,0.38)';
+  ctx.shadowBlur = size * 0.12;
+  ctx.fillStyle = '#4c237f';
+  ctx.beginPath();
+  ctx.ellipse(0, size * 0.02, size * 0.84, size * 0.28, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = '#e7a8ff';
+  ctx.lineWidth = Math.max(2, size * 0.065);
+  ctx.beginPath();
+  ctx.ellipse(0, size * 0.00, size * 0.72, size * 0.20, 0, 0, Math.PI * 2);
+  ctx.stroke();
+
+  for (let i = 0; i < 3; i++) {
+    const lx = (i - 1) * size * 0.34;
+    const blink = 0.45 + Math.sin(frame * 0.11 + seed + i) * 0.35;
+    ctx.globalAlpha = blink;
+    ctx.fillStyle = i === 1 ? '#fff296' : '#ff4e9c';
+    ctx.beginPath();
+    ctx.arc(lx, size * 0.05, size * 0.065, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  ctx.restore();
+}
+
 function drawCoin(x, y, size) {
   // Collectible uses the obstacle style, but as a circle instead of a diamond.
   const theme = currentTheme();
@@ -807,6 +1122,28 @@ function drawCoin(x, y, size) {
   ctx.arc(0, 0, size * 0.58 * pulse, 0, Math.PI * 2);
   ctx.fill();
   ctx.restore();
+
+  if (saintRing) {
+    const ringPulse = 1 + Math.sin((frame + y) * 0.12) * 0.04;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.scale(ringPulse, ringPulse);
+    ctx.shadowColor = 'rgba(255,242,150,0.72)';
+    ctx.shadowBlur = size * 0.32;
+    ctx.strokeStyle = '#fff296';
+    ctx.lineWidth = Math.max(2, size * 0.07);
+    ctx.beginPath();
+    ctx.ellipse(0, -size * 0.02, size * 0.86, size * 0.32, -0.10, 0, Math.PI * 2);
+    ctx.stroke();
+
+    ctx.shadowBlur = size * 0.22;
+    ctx.strokeStyle = 'rgba(216,182,255,0.82)';
+    ctx.lineWidth = Math.max(1, size * 0.032);
+    ctx.beginPath();
+    ctx.arc(0, 0, size * 0.76, -0.25, Math.PI + 0.48);
+    ctx.stroke();
+    ctx.restore();
+  }
 
   if (drawSprite('coin_red', x, y, size * 1.66 * pulse, size * 1.10 * pulse, {
     shadowColor: 'rgba(0,0,0,0.38)',
@@ -1161,6 +1498,55 @@ function drawHUD() {
   drawSaintRingStatus();
 }
 
+function drawMissionSymbol(centerX, centerY, radius, activeColors = []) {
+  const activeSet = new Set(activeColors);
+  const gap = radius * 2.35;
+  const positions = {
+    blue:   { x: centerX, y: centerY - gap * 0.40 },
+    white:  { x: centerX - gap * 0.50, y: centerY + gap * 0.46 },
+    purple: { x: centerX + gap * 0.50, y: centerY + gap * 0.46 }
+  };
+
+  ctx.save();
+  ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+  ctx.lineWidth = Math.max(1, radius * 0.12);
+  ctx.beginPath();
+  ctx.moveTo(positions.blue.x, positions.blue.y);
+  ctx.lineTo(positions.white.x, positions.white.y);
+  ctx.lineTo(positions.purple.x, positions.purple.y);
+  ctx.closePath();
+  ctx.stroke();
+
+  for (const color of COLOR_ORDER) {
+    const palette = CAR_PALETTES[color] || CAR_PALETTES.blue;
+    const pos = positions[color];
+    const unlocked = activeSet.has(color);
+    const fillColor = color === 'white' ? '#f7f6ef' : palette.body;
+    const strokeColor = unlocked ? fillColor : 'rgba(255,255,255,0.50)';
+
+    ctx.globalAlpha = unlocked ? 1 : 0.74;
+    ctx.shadowColor = unlocked ? alphaHex(fillColor, color === 'white' ? 0.72 : 0.64) : 'transparent';
+    ctx.shadowBlur = unlocked ? radius * 1.05 : 0;
+    ctx.fillStyle = unlocked ? fillColor : 'rgba(255,255,255,0.035)';
+    ctx.strokeStyle = strokeColor;
+    ctx.lineWidth = unlocked ? Math.max(2, radius * 0.28) : Math.max(1, radius * 0.18);
+    ctx.beginPath();
+    ctx.arc(pos.x, pos.y, unlocked ? radius * 1.02 : radius * 0.92, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    if (unlocked) {
+      ctx.shadowBlur = 0;
+      ctx.globalAlpha = color === 'white' ? 0.60 : 0.42;
+      ctx.fillStyle = color === 'white' ? '#ffffff' : '#ffffff';
+      ctx.beginPath();
+      ctx.arc(pos.x - radius * 0.25, pos.y - radius * 0.25, radius * 0.26, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+  ctx.restore();
+}
+
 function orderedColorPreview() {
   const idx = COLOR_ORDER.indexOf(selectedCarColor);
   const safeIdx = idx === -1 ? 0 : idx;
@@ -1172,7 +1558,7 @@ function orderedColorPreview() {
 }
 
 function drawColorStatus() {
-  if (gameState !== 'playing' || !colorFeatureUnlocked()) return;
+  if (gameState !== 'playing' || dreamHighway || !colorFeatureUnlocked()) return;
 
   const chipR = Math.max(7, canvas.width * 0.020);
   const gap = chipR * 2.55;
@@ -1219,7 +1605,7 @@ function drawSaintRingStatus() {
 
   const size = Math.max(16, canvas.width * 0.050);
   const x = canvas.width * 0.070;
-  const y = canvas.height * 0.095;
+  const y = canvas.height * 0.128;
   const theme = currentTheme();
 
   ctx.save();
@@ -1256,16 +1642,18 @@ function drawMenu(r) {
   // Title
   ctx.font      = `bold ${fBig}px Arial, sans-serif`;
   ctx.fillStyle = '#ffd700';
-  ctx.fillText('LANE DODGER', cx, r.H * 0.26);
+  ctx.fillText('LANE DODGER', cx, r.H * 0.22);
+
+  drawMissionSymbol(cx, r.H * 0.315, Math.max(10, r.W * 0.034), []);
 
   // Instructions
   ctx.font      = `${fMid}px Arial, sans-serif`;
   ctx.fillStyle = '#dddddd';
-  ctx.fillText('Tap left or right to steer', cx, r.H * 0.38);
+  ctx.fillText('Tap left or right to steer', cx, r.H * 0.405);
 
   // Legend items
-  const iconY1 = r.H * 0.475;
-  const iconY2 = r.H * 0.555;
+  const iconY1 = r.H * 0.500;
+  const iconY2 = r.H * 0.580;
   const iconS  = r.H * 0.028;
 
   drawObstacle(cx - r.W * 0.20, iconY1, iconS * 1.2);
@@ -1389,25 +1777,58 @@ function drawVerticalSwipeIcon(x, y, size) {
   ctx.restore();
 }
 
-function drawColorIntroModal(r) {
+function drawMissionModalPanel(r, activeColors, accentColor = '#ffffff') {
   ctx.fillStyle = 'rgba(0,0,0,0.68)';
   ctx.fillRect(0, 0, r.W, r.H);
   const cx = r.W / 2;
-  const boxW = r.W * 0.66;
-  const boxH = r.H * 0.24;
-  const boxY = r.H * 0.38;
+  const boxW = r.W * 0.68;
+  const boxH = r.H * 0.28;
+  const boxY = r.H * 0.36;
   ctx.fillStyle = 'rgba(20,24,35,0.96)';
-  ctx.strokeStyle = '#ffffff';
+  ctx.strokeStyle = accentColor;
   ctx.lineWidth = 2;
   ctx.beginPath();
   ctx.roundRect(cx - boxW / 2, boxY, boxW, boxH, 18);
   ctx.fill();
   ctx.stroke();
 
+  drawMissionSymbol(cx, boxY + boxH * 0.22, Math.max(10, r.W * 0.032), activeColors);
+  return { cx, boxW, boxH, boxY };
+}
+
+function drawColorIntroModal(r) {
+  const { cx, boxW, boxH, boxY } = drawMissionModalPanel(r, ['blue'], CAR_PALETTES.blue.body);
   const carW = boxW * 0.25;
   const carH = carW * 1.85;
-  drawCar(cx - boxW * 0.13, boxY + boxH * 0.50, carW, carH, 'purple');
-  drawVerticalSwipeIcon(cx + boxW * 0.22, boxY + boxH * 0.50, boxH * 0.54);
+  drawCar(cx - boxW * 0.13, boxY + boxH * 0.62, carW, carH, 'purple');
+  drawVerticalSwipeIcon(cx + boxW * 0.22, boxY + boxH * 0.62, boxH * 0.45);
+}
+
+function drawSaintRingMissionModal(r) {
+  const { cx, boxW, boxH, boxY } = drawMissionModalPanel(r, ['blue', 'white'], '#f7f6ef');
+  const carW = boxW * 0.23;
+  const carH = carW * 1.85;
+  const carY = boxY + boxH * 0.64;
+  drawCar(cx, carY, carW, carH, 'white');
+  drawSaintRing(cx, carY - carH * 0.56, carW * 1.08, 1);
+}
+
+function drawSpaceMissionModal(r) {
+  const { cx, boxH, boxY } = drawMissionModalPanel(r, ['blue', 'white', 'purple'], CAR_PALETTES.purple.body);
+  const portalY = boxY + boxH * 0.64;
+  drawPortal(cx, portalY, boxH * 0.23, 'purple', 7301);
+}
+
+function drawPausedModal(r) {
+  if (pauseReason === 'whiteMission') {
+    drawSaintRingMissionModal(r);
+    return;
+  }
+  if (pauseReason === 'purpleMission') {
+    drawSpaceMissionModal(r);
+    return;
+  }
+  drawColorIntroModal(r);
 }
 
 function drawGameOver(r) {
@@ -1452,12 +1873,17 @@ function draw() {
   // Clear
   ctx.clearRect(0, 0, r.W, r.H);
 
-  drawBackground(r);
-  drawRoad(r);
+  if (dreamHighway) {
+    drawSpaceBackground(r);
+  } else {
+    drawBackground(r);
+    drawRoad(r);
+  }
 
   // Game objects
   for (const obj of objects) {
     if (obj.type === 'obstacle') drawObstacle(obj.x, obj.y, obj.size);
+    else if (obj.type === 'ufo') drawUfo(obj.x, obj.y, obj.size, obj.rotation || 0, obj.seed || 0);
     else if (obj.type === 'collect') drawCoin(obj.x, obj.y, obj.size);
     else if (obj.type === 'portal')  drawPortal(obj.x, obj.y, obj.size, obj.color, obj.seed);
   }
@@ -1472,14 +1898,14 @@ function draw() {
   // Player car
   const { carW, carH, carY } = carDims();
   drawCar(carX, carY, carW, carH);
-  drawNightOverlay(r, carX, carY, carW, carH);
-  if (saintRing) drawSaintRing(carX, carY - carH * 0.56, carW * 0.76, 0.95);
+  if (!dreamHighway) drawNightOverlay(r, carX, carY, carW, carH);
+  if (saintRing && !dreamHighway) drawSaintRing(carX, carY - carH * 0.56, carW * 0.76, 0.95);
 
   if (gameState === 'playing') {
     drawHUD();
   } else if (gameState === 'paused') {
     drawHUD();
-    drawColorIntroModal(r);
+    drawPausedModal(r);
   } else if (gameState === 'menu') {
     drawHUD();
     drawMenu(r);
@@ -1493,9 +1919,11 @@ function draw() {
 
 function handleTap() {
   if (gameState === 'paused') {
-    if (!canCloseColorIntro()) return;
+    if (!canCloseMissionModal()) return;
+    const closedReason = pauseReason;
     gameState = 'playing';
     pauseReason = null;
+    if (closedReason === 'purpleMission') startDreamHighway();
     return;
   }
   if (gameState === 'menu') {
@@ -1505,9 +1933,15 @@ function handleTap() {
   }
   if (gameState === 'gameover') {
     gameState = 'menu';
+    dreamHighway = false;
+    activeWorld = 'blue';
+    selectedCarColor = 'blue';
+    objects = [];
+    effects = [];
     return;
   }
   if (gameState === 'playing') {
+    if (dreamHighway) return;
     setPlayerLane(playerLane === 0 ? 1 : 0);
   }
 }
@@ -1519,10 +1953,19 @@ function setPlayerLane(lane) {
 }
 
 function moveByScreenSide(point) {
+  if (dreamHighway) {
+    setDreamTargetX(point.x);
+    return;
+  }
   setPlayerLane(point.x < canvas.width / 2 ? 0 : 1);
 }
 
+function setDreamTargetX(x) {
+  targetCarX = clampDreamX(x);
+}
+
 function isChangingLane() {
+  if (dreamHighway) return false;
   return Math.abs(carX - targetCarX) > 1;
 }
 
@@ -1576,6 +2019,10 @@ function handleTouchEnd(start, end) {
   }
 
   if (gameState === 'playing') {
+    if (dreamHighway) {
+      setDreamTargetX(end.x);
+      return;
+    }
     const swipeDirection = colorSwipeDirection(start, end);
     if (swipeDirection !== 0 && colorFeatureUnlocked()) {
       cycleCarColor(swipeDirection);
@@ -1590,7 +2037,20 @@ canvas.addEventListener('touchstart', (e) => {
   lastTouchTime = Date.now();
   const touch = e.changedTouches[0];
   touchStartPoint = canvasPoint(touch.clientX, touch.clientY);
+  if (gameState === 'playing' && dreamHighway) {
+    setDreamTargetX(touchStartPoint.x);
+    return;
+  }
   reverseLaneChangeFromPoint(touchStartPoint);
+}, { passive: false });
+
+canvas.addEventListener('touchmove', (e) => {
+  e.preventDefault();
+  lastTouchTime = Date.now();
+  if (gameState !== 'playing' || !dreamHighway) return;
+  const touch = e.changedTouches[0];
+  const point = canvasPoint(touch.clientX, touch.clientY);
+  setDreamTargetX(point.x);
 }, { passive: false });
 
 canvas.addEventListener('touchend', (e) => {
@@ -1615,11 +2075,30 @@ canvas.addEventListener('click', (e) => {
 canvas.addEventListener('mousedown', (e) => {
   if (Date.now() - lastTouchTime < 500) return;
   const point = canvasPoint(e.clientX, e.clientY);
+  if (gameState === 'playing' && dreamHighway) {
+    mouseSteeringActive = true;
+    setDreamTargetX(point.x);
+    return;
+  }
   reverseLaneChangeFromPoint(point);
 });
 
+canvas.addEventListener('mousemove', (e) => {
+  if (!mouseSteeringActive || gameState !== 'playing' || !dreamHighway) return;
+  const point = canvasPoint(e.clientX, e.clientY);
+  setDreamTargetX(point.x);
+});
+
+window.addEventListener('mouseup', () => {
+  mouseSteeringActive = false;
+});
+
+window.addEventListener('blur', () => {
+  mouseSteeringActive = false;
+});
+
 window.addEventListener('keydown', (e) => {
-  if (e.key === ' ' && gameState === 'playing' && colorFeatureUnlocked()) {
+  if (e.key === ' ' && gameState === 'playing' && !dreamHighway && colorFeatureUnlocked()) {
     e.preventDefault();
     cycleCarColor();
     return;
@@ -1627,14 +2106,16 @@ window.addEventListener('keydown', (e) => {
 
   if (e.key === 'ArrowLeft') {
     e.preventDefault();
-    if (gameState === 'playing') setPlayerLane(0);
+    if (gameState === 'playing' && dreamHighway) setDreamTargetX(targetCarX - canvas.width * 0.18);
+    else if (gameState === 'playing') setPlayerLane(0);
     else handleTap();
     return;
   }
 
   if (e.key === 'ArrowRight') {
     e.preventDefault();
-    if (gameState === 'playing') setPlayerLane(1);
+    if (gameState === 'playing' && dreamHighway) setDreamTargetX(targetCarX + canvas.width * 0.18);
+    else if (gameState === 'playing') setPlayerLane(1);
     else handleTap();
     return;
   }
