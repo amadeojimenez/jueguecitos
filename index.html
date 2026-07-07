@@ -31,7 +31,7 @@
 const canvas = document.getElementById('gameCanvas');
 const ctx    = canvas.getContext('2d');
 // increase this version in any change in the code
-const GAME_VERSION = 'v0.5.7';
+const GAME_VERSION = 'v0.5.8';
 
 function resize() {
   // Portrait 9:16 ratio, fill the viewport
@@ -132,10 +132,11 @@ const MAX_SAME_LANE_OBSTACLES = 3;
 const INITIAL_SPEED      = 4.8;
 const INITIAL_SPAWN_DISTANCE = 336;
 const SPEED_RAMP_BONUS   = 0.115;
-const COIN_SPEED_BONUS   = 0.1275;
+const COIN_SCORE = 10;
+const COIN_SPEED_BONUS   = 0.10;
 const SPECIAL_COIN_SCORE = 50;
 const SPECIAL_COIN_SPEED_BONUS = 0.51;
-const SPEED_REDUCTION_INTERVAL_SCORE = 500;
+const SPEED_REDUCTION_INTERVAL_SCORE = 300;
 const SPEED_REDUCTION_MULTIPLIER = 2 / 3;
 const SPECIAL_COIN_PROBABILITY = 0.2;
 const MAX_SPEED          = 16;
@@ -347,7 +348,23 @@ function completeMission(color) {
   if (color === 'purple') showMissionModal('purpleMission');
 }
 
+function removeClosestObstacleInFrontOfCar() {
+  const { carY } = carDims();
+  let closestIndex = -1;
+  let closestY = -Infinity;
+
+  for (let i = 0; i < objects.length; i++) {
+    const obj = objects[i];
+    if (obj.type !== 'obstacle' || obj.y >= carY || obj.y <= closestY) continue;
+    closestY = obj.y;
+    closestIndex = i;
+  }
+
+  if (closestIndex !== -1) objects.splice(closestIndex, 1);
+}
+
 function showMissionModal(reason) {
+  removeClosestObstacleInFrontOfCar();
   pauseReason = reason;
   missionModalShownAt = performance.now();
   gameState = 'paused';
@@ -531,6 +548,14 @@ function isSpecialCoin() {
   return Math.random() < SPECIAL_COIN_PROBABILITY;
 }
 
+function scoreRampSpeedForPoints(points) {
+  return (points / 10) * speedRampBonus;
+}
+
+function coinVelocityBonus(obj) {
+  return obj.special ? specialCoinSpeedBonus : coinSpeedBonus;
+}
+
 function collectCoin(obj, hadSaintRing = false) {
   effects.push({
     x: obj.x,
@@ -541,9 +566,11 @@ function collectCoin(obj, hadSaintRing = false) {
     age: 0,
     duration: obj.special ? 30 : 22
   });
-  addScore(obj.special ? SPECIAL_COIN_SCORE : 10);
+  const coinScore = obj.special ? SPECIAL_COIN_SCORE : COIN_SCORE;
+  addScore(coinScore);
   if (hadSaintRing) registerCollectedCoin(hadSaintRing);
-  speed = Math.min(speed + (obj.special ? specialCoinSpeedBonus : coinSpeedBonus), MAX_SPEED);
+  // Coin bonuses stay below the speed earned by advancing the same score amount.
+  speed = Math.min(speed + Math.min(coinVelocityBonus(obj), scoreRampSpeedForPoints(coinScore)), MAX_SPEED);
 }
 
 function collapsePortal(portal) {
