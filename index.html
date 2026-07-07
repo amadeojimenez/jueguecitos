@@ -105,6 +105,7 @@ let objects;          // [{ x, y, type, size, lane, color, seed }]
 let effects;          // [{ x, y, type, size, color, seed, age, duration }]
 let roadOffset;
 let scoreTimer, spawnTimer, spawnInterval, diffTimer;
+let speedRampBonus, coinSpeedBonus, specialCoinSpeedBonus, nextSpeedReductionScore;
 let portalTimer, portalInterval;
 let nightTimer, nightInterval, nightPhaseTimer, nightPhase;
 let selectedCarColor, activeWorld;
@@ -129,11 +130,13 @@ const EMPTY_SPAWN_PROBABILITY = 0.05;
 const COIN_SPAWN_PROBABILITY = 0.28;
 const MAX_SAME_LANE_OBSTACLES = 3;
 const INITIAL_SPEED      = 4.8;
-const INITIAL_SPAWN_DISTANCE = 352;
-const SPEED_RAMP_BONUS   = 0.23;
-const COIN_SPEED_BONUS   = 0.255;
+const INITIAL_SPAWN_DISTANCE = 336;
+const SPEED_RAMP_BONUS   = 0.115;
+const COIN_SPEED_BONUS   = 0.1275;
 const SPECIAL_COIN_SCORE = 50;
-const SPECIAL_COIN_SPEED_BONUS = 1.02;
+const SPECIAL_COIN_SPEED_BONUS = 0.51;
+const SPEED_REDUCTION_INTERVAL_SCORE = 500;
+const SPEED_REDUCTION_MULTIPLIER = 2 / 3;
 const SPECIAL_COIN_PROBABILITY = 0.2;
 const MAX_SPEED          = 16;
 const OPPOSING_OBSTACLE_GAP_MULT = 1.3;
@@ -245,6 +248,10 @@ function initGame() {
   scoreTimer = 0;
   spawnTimer = 0;
   spawnInterval = INITIAL_SPAWN_DISTANCE;
+  speedRampBonus = SPEED_RAMP_BONUS;
+  coinSpeedBonus = COIN_SPEED_BONUS;
+  specialCoinSpeedBonus = SPECIAL_COIN_SPEED_BONUS;
+  nextSpeedReductionScore = SPEED_REDUCTION_INTERVAL_SCORE;
   diffTimer  = 0;
   portalTimer = 0;
   portalInterval = randomPortalInterval();
@@ -298,8 +305,22 @@ function setActiveWorld(world) {
   activeWorld = world;
 }
 
+function reduceVelocityIncrements() {
+  speedRampBonus *= SPEED_REDUCTION_MULTIPLIER;
+  coinSpeedBonus *= SPEED_REDUCTION_MULTIPLIER;
+  specialCoinSpeedBonus *= SPEED_REDUCTION_MULTIPLIER;
+}
+
+function updateVelocityIncrementMilestones() {
+  while (score >= nextSpeedReductionScore) {
+    reduceVelocityIncrements();
+    nextSpeedReductionScore += SPEED_REDUCTION_INTERVAL_SCORE;
+  }
+}
+
 function addScore(points) {
   score += points;
+  updateVelocityIncrementMilestones();
   if (colorFeatureUnlocked()) completeMission('blue');
   if (activeWorld !== 'white' || saintRing) return;
 
@@ -522,7 +543,7 @@ function collectCoin(obj, hadSaintRing = false) {
   });
   addScore(obj.special ? SPECIAL_COIN_SCORE : 10);
   if (hadSaintRing) registerCollectedCoin(hadSaintRing);
-  speed = Math.min(speed + (obj.special ? SPECIAL_COIN_SPEED_BONUS : COIN_SPEED_BONUS), MAX_SPEED);
+  speed = Math.min(speed + (obj.special ? specialCoinSpeedBonus : coinSpeedBonus), MAX_SPEED);
 }
 
 function collapsePortal(portal) {
@@ -654,8 +675,8 @@ function update() {
   // Difficulty ramp every ~5 s. Spawn spacing is tracked in pixels so
   // higher velocity does not stretch the vertical distance between spawns.
   if (++diffTimer >= 300) {
-    speed         = Math.min(speed + SPEED_RAMP_BONUS, MAX_SPEED);
-    spawnInterval = Math.max(spawnInterval - 20, 260);
+    speed         = Math.min(speed + speedRampBonus, MAX_SPEED);
+    spawnInterval = Math.max(spawnInterval - 20, 250);
     diffTimer = 0;
   }
 
