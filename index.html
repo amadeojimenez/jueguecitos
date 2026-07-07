@@ -31,7 +31,7 @@
 const canvas = document.getElementById('gameCanvas');
 const ctx    = canvas.getContext('2d');
 // increase this version in any change in the code
-const GAME_VERSION = 'v0.5.6';
+const GAME_VERSION = 'v0.5.7';
 
 function resize() {
   // Portrait 9:16 ratio, fill the viewport
@@ -128,10 +128,12 @@ const LANE_LERP           = 0.14;
 const EMPTY_SPAWN_PROBABILITY = 0.05;
 const COIN_SPAWN_PROBABILITY = 0.28;
 const MAX_SAME_LANE_OBSTACLES = 3;
-const SPEED_RAMP_BONUS   = 0.27;
-const COIN_SPEED_BONUS   = 0.30;
+const INITIAL_SPEED      = 4.8;
+const INITIAL_SPAWN_DISTANCE = 352;
+const SPEED_RAMP_BONUS   = 0.23;
+const COIN_SPEED_BONUS   = 0.255;
 const SPECIAL_COIN_SCORE = 50;
-const SPECIAL_COIN_SPEED_BONUS = 1.20;
+const SPECIAL_COIN_SPEED_BONUS = 1.02;
 const SPECIAL_COIN_PROBABILITY = 0.2;
 const MAX_SPEED          = 16;
 const OPPOSING_OBSTACLE_GAP_MULT = 1.3;
@@ -238,11 +240,11 @@ function initGame() {
   effects    = [];
   score      = 0;
   frame      = 0;
-  speed      = 4;
+  speed      = INITIAL_SPEED;
   roadOffset = 0;
   scoreTimer = 0;
   spawnTimer = 0;
-  spawnInterval = 88;
+  spawnInterval = INITIAL_SPAWN_DISTANCE;
   diffTimer  = 0;
   portalTimer = 0;
   portalInterval = randomPortalInterval();
@@ -649,24 +651,26 @@ function update() {
   // Score every 30 frames (~½ s at 60 fps)
   if (++scoreTimer >= 30) { addScore(1); scoreTimer = 0; }
 
-  // Difficulty ramp every ~5 s
+  // Difficulty ramp every ~5 s. Spawn spacing is tracked in pixels so
+  // higher velocity does not stretch the vertical distance between spawns.
   if (++diffTimer >= 300) {
     speed         = Math.min(speed + SPEED_RAMP_BONUS, MAX_SPEED);
-    spawnInterval = Math.max(spawnInterval - 5, 31);
+    spawnInterval = Math.max(spawnInterval - 20, 260);
     diffTimer = 0;
   }
 
   if (colorFeatureUnlocked()) portalTimer++;
 
   // Spawn
-  if (++spawnTimer >= spawnInterval) {
+  spawnTimer += speed;
+  if (spawnTimer >= spawnInterval) {
     if (portalTimer >= portalInterval && spawnPortal()) {
       portalTimer = 0;
       portalInterval = randomPortalInterval();
     } else {
       spawnObject();
     }
-    spawnTimer = 0;
+    spawnTimer -= spawnInterval;
   }
 
   updateEffects();
