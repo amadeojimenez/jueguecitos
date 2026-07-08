@@ -31,7 +31,7 @@
 const canvas = document.getElementById('gameCanvas');
 const ctx    = canvas.getContext('2d');
 // increase this version in any change in the code
-const GAME_VERSION = 'v0.5.8';
+const GAME_VERSION = 'v0.5.9';
 
 function resize() {
   // Portrait 9:16 ratio, fill the viewport
@@ -115,7 +115,6 @@ let dreamHighway, dreamSpawnTimer, dreamPathTimer, dreamWaveId;
 let colorIntroSeen, missionModalShownAt, pauseReason;
 let lastObstacleLane, sameLaneObstacleCount;
 let lastTouchTime = 0;
-let touchStartPoint = null;
 let mouseSteeringActive = false;
 
 resize();
@@ -157,7 +156,6 @@ const DEV_NIGHT_MAX_INTERVAL = 240;
 const NIGHT_WARNING_FRAMES = 180;
 const NIGHT_DURATION_FRAMES = 300;
 const NIGHT_BLINK_FRAMES = 7;
-const COLOR_SWIPE_MIN_FRAC = 0.055;
 const MISSION_MODAL_MIN_MS = 600;
 const MISSION_SYMBOL_ANIM_MS = 760;
 const DREAM_LERP = 0.24;
@@ -1910,33 +1908,48 @@ function drawNightOverlay(r, carCx, carCy, carW, carH) {
   ctx.restore();
 }
 
-function drawVerticalSwipeIcon(x, y, size) {
+function drawTapCurrentLaneHint(x, y, width, height) {
   ctx.save();
-  ctx.translate(x, y);
-  ctx.strokeStyle = '#ffffff';
-  ctx.fillStyle = '#ffffff';
-  ctx.lineWidth = Math.max(3, size * 0.08);
-  ctx.lineCap = 'round';
+  const laneW = width / 2;
+  const laneH = height * 0.78;
+  const roadX = x - width / 2;
+  const roadY = y - laneH / 2;
 
+  ctx.fillStyle = 'rgba(255,255,255,0.08)';
+  ctx.strokeStyle = 'rgba(255,255,255,0.72)';
+  ctx.lineWidth = Math.max(1.5, width * 0.018);
   ctx.beginPath();
-  ctx.moveTo(0, -size * 0.46);
-  ctx.lineTo(0, size * 0.46);
+  ctx.roundRect(roadX, roadY, width, laneH, width * 0.06);
+  ctx.fill();
   ctx.stroke();
 
+  ctx.setLineDash([height * 0.08, height * 0.055]);
   ctx.beginPath();
-  ctx.moveTo(0, -size * 0.54);
-  ctx.lineTo(-size * 0.18, -size * 0.34);
-  ctx.lineTo(size * 0.18, -size * 0.34);
-  ctx.closePath();
-  ctx.fill();
+  ctx.moveTo(x, roadY + height * 0.06);
+  ctx.lineTo(x, roadY + laneH - height * 0.06);
+  ctx.stroke();
+  ctx.setLineDash([]);
 
-  ctx.beginPath();
-  ctx.moveTo(0, size * 0.54);
-  ctx.lineTo(-size * 0.18, size * 0.34);
-  ctx.lineTo(size * 0.18, size * 0.34);
-  ctx.closePath();
-  ctx.fill();
+  const carW = laneW * 0.36;
+  const carH = carW * 1.85;
+  drawCar(roadX + laneW * 0.5, y + laneH * 0.06, carW, carH, 'purple');
 
+  const tapX = roadX + laneW * 0.5;
+  const tapY = roadY + laneH * 0.28;
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = Math.max(2, width * 0.02);
+  for (let i = 0; i < 2; i++) {
+    ctx.globalAlpha = 0.8 - i * 0.28;
+    ctx.beginPath();
+    ctx.arc(tapX, tapY, height * (0.105 + i * 0.055), 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = '#ffffff';
+  ctx.font = `900 ${Math.max(10, height * 0.13)}px Arial, sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('TAP', tapX, tapY);
   ctx.restore();
 }
 
@@ -1991,13 +2004,10 @@ function drawMissionModalPanel(r, title, activeColors, accentColor = '#ffffff', 
 }
 
 function drawColorIntroModal(r) {
-  const { cx, boxW, boxH, boxY } = drawMissionModalPanel(r, 'color swipe!', ['blue'], CAR_PALETTES.blue.body, 'blue');
-  const carW = boxW * 0.22;
-  const carH = carW * 1.85;
-  const iconY = boxY + boxH * 0.68;
-  drawCar(cx - boxW * 0.20, iconY, carW, carH, 'purple');
-  drawVerticalSwipeIcon(cx + boxW * 0.05, iconY, boxH * 0.34);
-  drawKeyboardKey(cx + boxW * 0.27, iconY, boxW * 0.24, boxH * 0.16, 'SPACE');
+  const { cx, boxW, boxH, boxY } = drawMissionModalPanel(r, 'tap current lane', ['blue'], CAR_PALETTES.blue.body, 'blue');
+  const hintY = boxY + boxH * 0.68;
+  drawTapCurrentLaneHint(cx - boxW * 0.12, hintY, boxW * 0.38, boxH * 0.38);
+  drawKeyboardKey(cx + boxW * 0.25, hintY, boxW * 0.24, boxH * 0.16, 'SPACE');
 }
 
 function drawSaintRingMissionModal(r) {
@@ -2366,19 +2376,17 @@ function canvasPoint(clientX, clientY) {
   };
 }
 
-function colorSwipeDirection(start, end) {
-  const dx = end.x - start.x;
-  const dy = end.y - start.y;
-  const minDist = Math.max(34, canvas.height * COLOR_SWIPE_MIN_FRAC);
-  if (Math.abs(dy) < minDist || Math.abs(dy) <= Math.abs(dx) * 1.25) return 0;
-  return dy < 0 ? 1 : -1;
+function laneFromPoint(point) {
+  return point.x < canvas.width / 2 ? 0 : 1;
 }
 
-function isTouchGesture(start, end) {
-  const dx = end.x - start.x;
-  const dy = end.y - start.y;
-  const minDist = Math.max(18, canvas.height * 0.024);
-  return Math.hypot(dx, dy) >= minDist;
+function handleLaneTap(point) {
+  const tappedLane = laneFromPoint(point);
+  if (tappedLane === playerLane && colorFeatureUnlocked()) {
+    cycleCarColor();
+    return;
+  }
+  setPlayerLane(tappedLane);
 }
 
 function handlePointerPress(point) {
@@ -2393,11 +2401,12 @@ function handlePointerPress(point) {
   }
 
   if (gameState === 'playing') {
-    moveByScreenSide(point);
+    if (dreamHighway) setDreamTargetX(point.x);
+    else handleLaneTap(point);
   }
 }
 
-function handleTouchEnd(start, end) {
+function handleTouchEnd(end) {
   if (gameState === 'paused') {
     handleTap();
     return;
@@ -2409,16 +2418,8 @@ function handleTouchEnd(start, end) {
   }
 
   if (gameState === 'playing') {
-    if (dreamHighway) {
-      setDreamTargetX(end.x);
-      return;
-    }
-    if (isTouchGesture(start, end)) {
-      const swipeDirection = colorSwipeDirection(start, end);
-      if (swipeDirection !== 0 && colorFeatureUnlocked()) cycleCarColor(swipeDirection);
-      return;
-    }
-    moveByScreenSide(end);
+    if (dreamHighway) setDreamTargetX(end.x);
+    else handleLaneTap(end);
   }
 }
 
@@ -2426,9 +2427,9 @@ canvas.addEventListener('touchstart', (e) => {
   e.preventDefault();
   lastTouchTime = Date.now();
   const touch = e.changedTouches[0];
-  touchStartPoint = canvasPoint(touch.clientX, touch.clientY);
+  const point = canvasPoint(touch.clientX, touch.clientY);
   if (gameState === 'playing' && dreamHighway) {
-    setDreamTargetX(touchStartPoint.x);
+    setDreamTargetX(point.x);
     return;
   }
 }, { passive: false });
@@ -2447,12 +2448,7 @@ canvas.addEventListener('touchend', (e) => {
   lastTouchTime = Date.now();
   const touch = e.changedTouches[0];
   const endPoint = canvasPoint(touch.clientX, touch.clientY);
-  handleTouchEnd(touchStartPoint || endPoint, endPoint);
-  touchStartPoint = null;
-}, { passive: false });
-
-canvas.addEventListener('touchcancel', () => {
-  touchStartPoint = null;
+  handleTouchEnd(endPoint);
 }, { passive: false });
 
 canvas.addEventListener('click', (e) => {
