@@ -41,7 +41,7 @@
 const canvas = document.getElementById('gameCanvas');
 const ctx    = canvas.getContext('2d');
 // increase this version in any change in the code
-const GAME_VERSION = 'v0.5.22';
+const GAME_VERSION = 'v0.5.24';
 let touchGestureActive = false;
 let resizeQueuedAfterTouch = false;
 
@@ -144,6 +144,7 @@ let scoreTimer, spawnTimer, spawnInterval, diffTimer;
 let speedRampBonus, coinSpeedBonus, specialCoinSpeedBonus, nextSpeedReductionScore;
 let portalTimer, portalInterval;
 let nightTimer, nightInterval, nightPhaseTimer, nightPhase;
+let purpleFlipTimer, purpleFlipInterval, purpleFlipPhaseTimer, purpleFlipPhase;
 let selectedCarColor, activeWorld;
 let saintRing, whiteMissionColorSwaps;
 let missionUnlocked, purpleMissionCoinCount;
@@ -168,8 +169,12 @@ const LANE_LERP           = 0.14;
 const EMPTY_SPAWN_PROBABILITY = 0.025;
 const COIN_SPAWN_PROBABILITY = 0.28;
 const MAX_SAME_LANE_OBSTACLES = 3;
+const REFERENCE_CANVAS_WIDTH = 360; // Samsung Galaxy S24 CSS px at the game's 9:16 fit
+const REFERENCE_LANE_WIDTH = REFERENCE_CANVAS_WIDTH * (1 - GRASS_FRAC * 2) / 2;
 const INITIAL_SPEED      = 5.2;
 const INITIAL_SPAWN_DISTANCE = 336;
+const SPAWN_DISTANCE_REDUCTION = 20;
+const MIN_SPAWN_DISTANCE = 250;
 const SPEED_RAMP_BONUS   = 0.115;
 const COIN_SCORE = 10;
 const COIN_SPEED_BONUS   = 0.10;
@@ -196,6 +201,8 @@ const DEV_NIGHT_MAX_INTERVAL = 240;
 const NIGHT_WARNING_FRAMES = 180;
 const NIGHT_DURATION_FRAMES = 300;
 const NIGHT_BLINK_FRAMES = 7;
+const PURPLE_FLIP_WARNING_FRAMES = 60;
+const PURPLE_FLIP_DURATION_FRAMES = 300;
 const MISSION_MODAL_MIN_MS = 600;
 const MISSION_SYMBOL_ANIM_MS = 760;
 const DREAM_LERP = 0.24;
@@ -210,6 +217,18 @@ const FIXED_TIMESTEP_MS = 1000 / 60;
 const MAX_FRAME_DELTA_MS = 100;
 // Hitbox is smaller than the visual to feel fair when near-missing
 const COLLISION_SCALE     = 0.65;
+
+function gameplayScale() {
+  return roadMetrics().laneW / REFERENCE_LANE_WIDTH;
+}
+
+function scaledGameplayValue(value) {
+  return value * gameplayScale();
+}
+
+function maxSpeed() {
+  return scaledGameplayValue(MAX_SPEED);
+}
 
 const ASSET_PATHS = {
   car_blue: 'img/car_blue.png',
@@ -292,14 +311,14 @@ function initGame() {
   effects    = [];
   score      = 0;
   frame      = 0;
-  speed      = INITIAL_SPEED;
+  speed      = scaledGameplayValue(INITIAL_SPEED);
   roadOffset = 0;
   scoreTimer = 0;
   spawnTimer = 0;
-  spawnInterval = INITIAL_SPAWN_DISTANCE;
-  speedRampBonus = SPEED_RAMP_BONUS;
-  coinSpeedBonus = COIN_SPEED_BONUS;
-  specialCoinSpeedBonus = SPECIAL_COIN_SPEED_BONUS;
+  spawnInterval = scaledGameplayValue(INITIAL_SPAWN_DISTANCE);
+  speedRampBonus = scaledGameplayValue(SPEED_RAMP_BONUS);
+  coinSpeedBonus = scaledGameplayValue(COIN_SPEED_BONUS);
+  specialCoinSpeedBonus = scaledGameplayValue(SPECIAL_COIN_SPEED_BONUS);
   nextSpeedReductionScore = SPEED_REDUCTION_INTERVAL_SCORE;
   diffTimer  = 0;
   portalTimer = 0;
@@ -308,6 +327,10 @@ function initGame() {
   nightInterval = randomNightInterval();
   nightPhaseTimer = 0;
   nightPhase = 'idle';
+  purpleFlipTimer = 0;
+  purpleFlipInterval = randomPurpleFlipInterval();
+  purpleFlipPhaseTimer = 0;
+  purpleFlipPhase = 'idle';
   colorIntroSeen = devMode;
   missionModalShownAt = 0;
   pauseReason = null;
@@ -354,11 +377,18 @@ function randomNightInterval() {
   return minInterval + Math.floor(Math.random() * (maxInterval - minInterval + 1));
 }
 
+function randomPurpleFlipInterval() {
+  const minInterval = devMode ? DEV_NIGHT_MIN_INTERVAL : NIGHT_MIN_INTERVAL;
+  const maxInterval = devMode ? DEV_NIGHT_MAX_INTERVAL : NIGHT_MAX_INTERVAL;
+  return minInterval + Math.floor(Math.random() * (maxInterval - minInterval + 1));
+}
+
 function colorFeatureUnlocked() {
   return devMode || score >= COLOR_UNLOCK_SCORE;
 }
 
 function setActiveWorld(world) {
+  const previousWorld = activeWorld;
   if (
     missionUnlocked &&
     !missionUnlocked.white &&
@@ -368,6 +398,10 @@ function setActiveWorld(world) {
     whiteMissionColorSwaps = 0;
   }
   activeWorld = world;
+  if (previousWorld !== world) {
+    resetNightEffect();
+    resetPurpleFlipEffect();
+  }
 }
 
 function reduceVelocityIncrements() {
@@ -461,10 +495,11 @@ function startDreamHighway() {
   activeWorld = 'purple';
   selectedCarColor = 'purple';
   saintRing = false;
-  speed = DREAM_SCROLL_SPEED;
+  speed = scaledGameplayValue(DREAM_SCROLL_SPEED);
   objects = [];
   effects = [];
   resetNightEffect();
+  resetPurpleFlipEffect();
   carX = clampDreamX(r.centerX);
   targetCarX = carX;
 }
@@ -658,7 +693,7 @@ function collectCoin(obj) {
   addScore(coinScore);
   registerCollectedCoin();
   // Coin bonuses stay below the speed earned by advancing the same score amount.
-  speed = Math.min(speed + Math.min(coinVelocityBonus(obj), scoreRampSpeedForPoints(coinScore)), MAX_SPEED);
+  speed = Math.min(speed + Math.min(coinVelocityBonus(obj), scoreRampSpeedForPoints(coinScore)), maxSpeed());
 }
 
 function collapsePortal(portal) {
@@ -832,6 +867,7 @@ function update() {
 
   maybeShowColorIntro();
   updateNightEffect();
+  updatePurpleFlipEffect();
 
   carX += (targetCarX - carX) * LANE_LERP;
 
@@ -844,8 +880,11 @@ function update() {
   // Difficulty ramp every ~5 s. Spawn spacing is tracked in pixels so
   // higher velocity does not stretch the vertical distance between spawns.
   if (++diffTimer >= 300) {
-    speed         = Math.min(speed + speedRampBonus, MAX_SPEED);
-    spawnInterval = Math.max(spawnInterval - 20, 250);
+    speed         = Math.min(speed + speedRampBonus, maxSpeed());
+    spawnInterval = Math.max(
+      spawnInterval - scaledGameplayValue(SPAWN_DISTANCE_REDUCTION),
+      scaledGameplayValue(MIN_SPAWN_DISTANCE)
+    );
     diffTimer = 0;
   }
 
@@ -935,6 +974,13 @@ function resetNightEffect() {
   nightPhase = 'idle';
 }
 
+function resetPurpleFlipEffect() {
+  purpleFlipTimer = 0;
+  purpleFlipInterval = randomPurpleFlipInterval();
+  purpleFlipPhaseTimer = 0;
+  purpleFlipPhase = 'idle';
+}
+
 function updateNightEffect() {
   if (activeWorld !== 'white') {
     resetNightEffect();
@@ -956,6 +1002,36 @@ function updateNightEffect() {
   } else if (nightPhase === 'night' && nightPhaseTimer >= NIGHT_DURATION_FRAMES) {
     resetNightEffect();
   }
+}
+
+function updatePurpleFlipEffect() {
+  if (activeWorld !== 'purple' || dreamHighway) {
+    resetPurpleFlipEffect();
+    return;
+  }
+
+  if (purpleFlipPhase === 'idle') {
+    if (++purpleFlipTimer >= purpleFlipInterval) {
+      purpleFlipPhase = 'warning';
+      purpleFlipPhaseTimer = 0;
+    }
+    return;
+  }
+
+  purpleFlipPhaseTimer++;
+  if (purpleFlipPhase === 'warning' && purpleFlipPhaseTimer >= PURPLE_FLIP_WARNING_FRAMES) {
+    purpleFlipPhase = 'flipped';
+    purpleFlipPhaseTimer = 0;
+  } else if (purpleFlipPhase === 'flipped' && purpleFlipPhaseTimer >= PURPLE_FLIP_DURATION_FRAMES) {
+    purpleFlipPhase = 'returning';
+    purpleFlipPhaseTimer = 0;
+  } else if (purpleFlipPhase === 'returning' && purpleFlipPhaseTimer >= PURPLE_FLIP_WARNING_FRAMES) {
+    resetPurpleFlipEffect();
+  }
+}
+
+function isPurpleFlipWarningPhase() {
+  return purpleFlipPhase === 'warning' || purpleFlipPhase === 'returning';
 }
 
 // ─── Drawing Helpers ─────────────────────────────────────────────────────────
@@ -1191,7 +1267,7 @@ function drawDreamClouds(r, offset) {
   }
 }
 
-function drawCreature(x, y, size, flip, eyeColor = '#d8b6ff') {
+function drawCreature(x, y, size, flip, eyeColor = '#d8b6ff', showTeeth = false) {
   ctx.save();
   ctx.translate(x, y);
   ctx.scale(flip ? -1 : 1, 1);
@@ -1211,15 +1287,44 @@ function drawCreature(x, y, size, flip, eyeColor = '#d8b6ff') {
   ctx.quadraticCurveTo(-size * 0.62, size * 0.44, -size * 0.18, size * 0.58);
   ctx.stroke();
 
-  ctx.fillStyle = eyeColor;
-  if (eyeColor === '#ff233d') {
-    ctx.shadowColor = 'rgba(255,35,61,0.85)';
-    ctx.shadowBlur = size * 0.10;
+  const warningEyes = showTeeth;
+  const eyeRadius = size * (warningEyes ? 0.072 : 0.035);
+  if (warningEyes) {
+    ctx.shadowColor = eyeColor === '#ffffff'
+      ? 'rgba(255,255,255,0.95)'
+      : 'rgba(255,35,61,0.95)';
+    ctx.shadowBlur = size * 0.18;
+    ctx.fillStyle = eyeColor;
+    ctx.beginPath();
+    ctx.arc(size * 0.29, -size * 0.24, eyeRadius * 1.72, 0, Math.PI * 2);
+    ctx.arc(size * 0.42, -size * 0.24, eyeRadius * 1.72, 0, Math.PI * 2);
+    ctx.fill();
+  } else {
+    ctx.fillStyle = eyeColor;
+    if (eyeColor === '#ff233d') {
+      ctx.shadowColor = 'rgba(255,35,61,0.85)';
+      ctx.shadowBlur = size * 0.10;
+    }
   }
   ctx.beginPath();
-  ctx.arc(size * 0.29, -size * 0.24, size * 0.035, 0, Math.PI * 2);
-  ctx.arc(size * 0.42, -size * 0.24, size * 0.035, 0, Math.PI * 2);
+  ctx.arc(size * 0.29, -size * 0.24, eyeRadius, 0, Math.PI * 2);
+  ctx.arc(size * 0.42, -size * 0.24, eyeRadius, 0, Math.PI * 2);
   ctx.fill();
+
+  if (showTeeth) {
+    ctx.shadowColor = 'rgba(255,255,255,0.40)';
+    ctx.shadowBlur = size * 0.045;
+    ctx.fillStyle = '#fff3df';
+    for (let i = 0; i < 3; i++) {
+      const toothX = size * (0.27 + i * 0.07);
+      ctx.beginPath();
+      ctx.moveTo(toothX, -size * 0.155);
+      ctx.lineTo(toothX + size * 0.030, -size * 0.155);
+      ctx.lineTo(toothX + size * 0.015, -size * 0.070);
+      ctx.closePath();
+      ctx.fill();
+    }
+  }
 
   ctx.restore();
 }
@@ -1227,10 +1332,12 @@ function drawCreature(x, y, size, flip, eyeColor = '#d8b6ff') {
 function drawSideCreatures(r, offset) {
   const spacing = r.H * 0.19;
   const drift = offset * 0.85 % spacing;
-  const eyeColor = saintRing ? '#ff233d' : '#d8b6ff';
+  const showTeeth = isPurpleFlipWarningPhase();
+  const warningEyeColor = Math.floor(frame / 4) % 2 === 0 ? '#ff233d' : '#ffffff';
+  const eyeColor = showTeeth ? warningEyeColor : (saintRing ? '#ff233d' : '#d8b6ff');
   for (let y = -spacing + drift; y < r.H + spacing; y += spacing) {
-    drawCreature(r.grassW * 0.44, y, r.grassW * 0.78, false, eyeColor);
-    drawCreature(r.roadR + r.grassW * 0.56, y + spacing * 0.48, r.grassW * 0.70, true, eyeColor);
+    drawCreature(r.grassW * 0.44, y, r.grassW * 0.78, false, eyeColor, showTeeth);
+    drawCreature(r.roadR + r.grassW * 0.56, y + spacing * 0.48, r.grassW * 0.70, true, eyeColor, showTeeth);
   }
 }
 
@@ -2430,6 +2537,14 @@ function draw() {
     return;
   }
 
+  const flipGameplay = isPurpleGameplayFlipped();
+  ctx.save();
+  if (flipGameplay) {
+    ctx.translate(r.W / 2, r.H / 2);
+    ctx.rotate(Math.PI);
+    ctx.translate(-r.W / 2, -r.H / 2);
+  }
+
   if (dreamHighway) {
     drawSpaceBackground(r);
   } else {
@@ -2457,6 +2572,7 @@ function draw() {
   drawCar(carX, carY, carW, carH);
   if (!dreamHighway) drawNightOverlay(r, carX, carY, carW, carH);
   if (saintRing && !dreamHighway) drawSaintRing(carX, carY - carH * 0.56, carW * 0.76, 0.95);
+  ctx.restore();
 
   if (gameState === 'playing') {
     drawHUD();
@@ -2511,7 +2627,7 @@ function moveByScreenSide(point) {
     setDreamTargetX(point.x);
     return;
   }
-  setPlayerLane(point.x < canvas.width / 2 ? 0 : 1);
+  setPlayerLane(laneFromPoint(point));
 }
 
 function setDreamTargetX(x) {
@@ -2525,7 +2641,7 @@ function isChangingLane() {
 
 function reverseLaneChangeFromPoint(point) {
   if (gameState !== 'playing' || !isChangingLane()) return;
-  const lane = point.x < canvas.width / 2 ? 0 : 1;
+  const lane = laneFromPoint(point);
   if (lane !== playerLane) setPlayerLane(lane);
 }
 
@@ -2538,7 +2654,19 @@ function canvasPoint(clientX, clientY) {
 }
 
 function laneFromPoint(point) {
-  return point.x < canvas.width / 2 ? 0 : 1;
+  const screenLane = point.x < canvas.width / 2 ? 0 : 1;
+  return isPurpleGameplayFlipped() ? 1 - screenLane : screenLane;
+}
+
+function isPurpleGameplayFlipped() {
+  return activeWorld === 'purple' && !dreamHighway && (
+    purpleFlipPhase === 'flipped' ||
+    purpleFlipPhase === 'returning'
+  );
+}
+
+function setPlayerScreenLane(screenLane) {
+  setPlayerLane(isPurpleGameplayFlipped() ? 1 - screenLane : screenLane);
 }
 
 function beginTouchGesture(point) {
@@ -2707,7 +2835,7 @@ window.addEventListener('keydown', (e) => {
   if (e.key === 'ArrowLeft') {
     e.preventDefault();
     if (gameState === 'playing' && dreamHighway) setDreamTargetX(targetCarX - canvas.width * 0.18);
-    else if (gameState === 'playing') setPlayerLane(0);
+    else if (gameState === 'playing') setPlayerScreenLane(0);
     else handleTap();
     return;
   }
@@ -2715,7 +2843,7 @@ window.addEventListener('keydown', (e) => {
   if (e.key === 'ArrowRight') {
     e.preventDefault();
     if (gameState === 'playing' && dreamHighway) setDreamTargetX(targetCarX + canvas.width * 0.18);
-    else if (gameState === 'playing') setPlayerLane(1);
+    else if (gameState === 'playing') setPlayerScreenLane(1);
     else handleTap();
     return;
   }
