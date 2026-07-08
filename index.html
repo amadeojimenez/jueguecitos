@@ -31,7 +31,7 @@
 const canvas = document.getElementById('gameCanvas');
 const ctx    = canvas.getContext('2d');
 // increase this version in any change in the code
-const GAME_VERSION = 'v0.5.13';
+const GAME_VERSION = 'v0.5.14';
 
 function resize() {
   // Portrait 9:16 ratio, fill the viewport
@@ -2515,8 +2515,9 @@ canvas.addEventListener('touchstart', (e) => {
   lastTouchTime = Date.now();
   const touch = e.changedTouches[0];
   const point = canvasPoint(touch.clientX, touch.clientY);
-  if (gameState === 'playing' && dreamHighway) {
-    setDreamTargetX(point.x);
+  if (gameState === 'playing') {
+    if (dreamHighway) setDreamTargetX(point.x);
+    else handleLaneTap(point);
     return;
   }
 }, { passive: false });
@@ -2535,7 +2536,12 @@ canvas.addEventListener('touchend', (e) => {
   lastTouchTime = Date.now();
   const touch = e.changedTouches[0];
   const endPoint = canvasPoint(touch.clientX, touch.clientY);
-  handleTouchEnd(endPoint);
+  if (gameState === 'paused' || gameState === 'menu' || gameState === 'gameover') {
+    handleTouchEnd(endPoint);
+  } else if (gameState === 'playing' && dreamHighway) {
+    setDreamTargetX(endPoint.x);
+  }
+  // Lane changes in playing mode are handled on touchstart, not touchend
 }, { passive: false });
 
 canvas.addEventListener('click', (e) => {
