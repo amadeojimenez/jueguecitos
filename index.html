@@ -41,7 +41,7 @@
 const canvas = document.getElementById('gameCanvas');
 const ctx    = canvas.getContext('2d');
 // increase this version in any change in the code
-const GAME_VERSION = 'v0.5.20';
+const GAME_VERSION = 'v0.5.21';
 let touchGestureActive = false;
 let resizeQueuedAfterTouch = false;
 
@@ -206,6 +206,8 @@ const DIMENSION_SEQUENCE = ['blue', 'white', 'purple', 'white', 'blue'];
 const BLACK_PORTAL_MIN_INTERVAL = 210;
 const BLACK_PORTAL_MAX_INTERVAL = 420;
 const TOUCH_TAP_MAX_DISTANCE = 16;
+const FIXED_TIMESTEP_MS = 1000 / 60;
+const MAX_FRAME_DELTA_MS = 100;
 // Hitbox is smaller than the visual to feel fair when near-missing
 const COLLISION_SCALE     = 0.65;
 
@@ -2686,10 +2688,26 @@ window.addEventListener('keydown', (e) => {
 
 // ─── Game Loop ───────────────────────────────────────────────────────────────
 
-function loop() {
+let lastLoopTime = 0;
+let loopAccumulatorMs = 0;
+
+function stepGameFrame() {
   frame++;
   if (gameState === 'playing') update();
   else if (gameState !== 'paused') roadOffset += 1.5;    // animate road in menu/gameover background
+}
+
+function loop(now) {
+  if (!lastLoopTime) lastLoopTime = now;
+  const deltaMs = Math.min(now - lastLoopTime, MAX_FRAME_DELTA_MS);
+  lastLoopTime = now;
+  loopAccumulatorMs += deltaMs;
+
+  while (loopAccumulatorMs >= FIXED_TIMESTEP_MS) {
+    stepGameFrame();
+    loopAccumulatorMs -= FIXED_TIMESTEP_MS;
+  }
+
   draw();
   requestAnimationFrame(loop);
 }
@@ -2697,7 +2715,8 @@ function loop() {
 // ─── Boot ────────────────────────────────────────────────────────────────────
 gameState = devMode ? 'playing' : 'menu';
 initGame();
-loop();
+draw();
+requestAnimationFrame(loop);
 </script>
 </body>
 </html>
