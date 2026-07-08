@@ -31,7 +31,7 @@
 const canvas = document.getElementById('gameCanvas');
 const ctx    = canvas.getContext('2d');
 // increase this version in any change in the code
-const GAME_VERSION = 'v0.5.10';
+const GAME_VERSION = 'v0.5.11';
 
 function resize() {
   // Portrait 9:16 ratio, fill the viewport
@@ -112,6 +112,7 @@ let selectedCarColor, activeWorld;
 let saintRing, whiteWorldPoints;
 let missionUnlocked, purpleRingCoinStreak;
 let dreamHighway, dreamSpawnTimer, dreamPathTimer, dreamWaveId;
+let dimensionMissionActive, dimensionProgress, dimensionComplete, blackPortalTimer, blackPortalInterval;
 let colorIntroSeen, missionModalShownAt, pauseReason;
 let lastObstacleLane, sameLaneObstacleCount;
 let lastTouchTime = 0;
@@ -162,6 +163,9 @@ const DREAM_LERP = 0.24;
 const DREAM_SCROLL_SPEED = 5.3;
 const DREAM_COIN_PATH_INTERVAL = 78;
 const DREAM_UFO_INTERVAL = 54;
+const DIMENSION_SEQUENCE = ['blue', 'white', 'purple', 'white', 'blue'];
+const BLACK_PORTAL_MIN_INTERVAL = 210;
+const BLACK_PORTAL_MAX_INTERVAL = 420;
 // Hitbox is smaller than the visual to feel fair when near-missing
 const COLLISION_SCALE     = 0.65;
 
@@ -275,6 +279,11 @@ function initGame() {
   dreamSpawnTimer = 0;
   dreamPathTimer = 0;
   dreamWaveId = 0;
+  dimensionMissionActive = false;
+  dimensionProgress = 0;
+  dimensionComplete = false;
+  blackPortalTimer = 0;
+  blackPortalInterval = randomBlackPortalInterval();
   lastObstacleLane = null;
   sameLaneObstacleCount = 0;
 
@@ -286,6 +295,10 @@ function initGame() {
 
 function randomPortalInterval() {
   return PORTAL_MIN_INTERVAL + Math.floor(Math.random() * (PORTAL_MAX_INTERVAL - PORTAL_MIN_INTERVAL + 1));
+}
+
+function randomBlackPortalInterval() {
+  return BLACK_PORTAL_MIN_INTERVAL + Math.floor(Math.random() * (BLACK_PORTAL_MAX_INTERVAL - BLACK_PORTAL_MIN_INTERVAL + 1));
 }
 
 function randomNightInterval() {
@@ -343,7 +356,35 @@ function completeMission(color) {
   if (!missionUnlocked || missionUnlocked[color]) return;
   missionUnlocked[color] = true;
   if (color === 'white') showMissionModal('whiteMission');
-  if (color === 'purple') showMissionModal('purpleMission');
+  if (color === 'purple') startDimensionMission();
+}
+
+function startDimensionMission() {
+  dimensionMissionActive = true;
+  dimensionProgress = 0;
+  dimensionComplete = false;
+  blackPortalTimer = 0;
+  blackPortalInterval = randomBlackPortalInterval();
+  showMissionModal('dimensionMission');
+}
+
+function completeDimensionMission() {
+  dimensionMissionActive = false;
+  dimensionProgress = DIMENSION_SEQUENCE.length;
+  dimensionComplete = true;
+  blackPortalTimer = 0;
+  blackPortalInterval = randomBlackPortalInterval();
+}
+
+function registerDimensionPortal(color) {
+  if (!dimensionMissionActive || dimensionComplete) return;
+  const expectedColor = DIMENSION_SEQUENCE[dimensionProgress];
+  if (color === expectedColor) {
+    dimensionProgress++;
+    if (dimensionProgress >= DIMENSION_SEQUENCE.length) completeDimensionMission();
+    return;
+  }
+  dimensionProgress = color === DIMENSION_SEQUENCE[0] ? 1 : 0;
 }
 
 function removeClosestObstacleInFrontOfCar() {
@@ -657,13 +698,29 @@ function spawnPortal() {
   const r = roadMetrics();
   const lane = Math.random() < 0.5 ? 0 : 1;
   const choices = COLOR_ORDER.filter(color => color !== activeWorld);
-  const color = choices[Math.floor(Math.random() * choices.length)];
+  const nextDimensionColor = dimensionMissionActive ? DIMENSION_SEQUENCE[dimensionProgress] : null;
+  const color = nextDimensionColor && choices.includes(nextDimensionColor) && Math.random() < 0.62
+    ? nextDimensionColor
+    : choices[Math.floor(Math.random() * choices.length)];
   const size = r.laneW * 0.48;
   const y = -size * 1.6;
   const seed = Math.floor(Math.random() * 100000);
 
   const x = lane === 0 ? r.lane0 : r.lane1;
   objects.push({ x, y, type: 'portal', size, lane, color, seed });
+  return true;
+}
+
+function spawnBlackPortal() {
+  if (!dimensionComplete || objects.some(obj => obj.type === 'portal')) return false;
+
+  const r = roadMetrics();
+  const lane = Math.random() < 0.5 ? 0 : 1;
+  const size = r.laneW * 0.54;
+  const y = -size * 1.6;
+  const seed = Math.floor(Math.random() * 100000);
+  const x = lane === 0 ? r.lane0 : r.lane1;
+  objects.push({ x, y, type: 'portal', size, lane, color: 'black', seed });
   return true;
 }
 
@@ -706,11 +763,15 @@ function update() {
   }
 
   if (colorFeatureUnlocked()) portalTimer++;
+  if (dimensionComplete) blackPortalTimer++;
 
   // Spawn
   spawnTimer += speed;
   if (spawnTimer >= spawnInterval) {
-    if (portalTimer >= portalInterval && spawnPortal()) {
+    if (blackPortalTimer >= blackPortalInterval && spawnBlackPortal()) {
+      blackPortalTimer = 0;
+      blackPortalInterval = randomBlackPortalInterval();
+    } else if (portalTimer >= portalInterval && spawnPortal()) {
       portalTimer = 0;
       portalInterval = randomPortalInterval();
     } else {
@@ -743,12 +804,19 @@ function update() {
         collectCoin(objects[i], hadSaintRing);
         objects.splice(i, 1);
       } else if (objects[i].type === 'portal') {
+        if (objects[i].color === 'black') {
+          collapsePortal(objects[i]);
+          objects.splice(i, 1);
+          startDreamHighway();
+          return;
+        }
         if (selectedCarColor !== objects[i].color) {
           collapsePortal(objects[i]);
           objects.splice(i, 1);
           continue;
         }
         setActiveWorld(objects[i].color);
+        registerDimensionPortal(objects[i].color);
         addScore(PORTAL_SCORE_BONUS);
         resetNightEffect();
         objects.splice(i, 1);
@@ -1361,9 +1429,11 @@ function drawSaintRingBreak(effect) {
 }
 
 function drawPortal(x, y, size, color, seed = 0) {
-  const palette = CAR_PALETTES[color] || CAR_PALETTES.blue;
+  const palette = color === 'black'
+    ? { body: '#050507', roof: '#15111c', head: '#7d6cff' }
+    : (CAR_PALETTES[color] || CAR_PALETTES.blue);
   const portalSeed = seed || COLOR_ORDER.indexOf(color) * 1009 + 17;
-  const innerGlowColor = color === 'white' ? '#ffffff' : palette.body;
+  const innerGlowColor = color === 'white' ? '#ffffff' : (color === 'black' ? '#7d6cff' : palette.body);
   const pulse = 0.68 + Math.sin(frame * 0.075 + portalSeed * 0.01) * 0.18;
   const drift = frame * 0.008 + portalSeed * 0.003;
   const outerRx = size * 0.56;
@@ -2013,10 +2083,32 @@ function drawSaintRingMissionModal(r) {
   drawSaintRing(cx, carY - carH * 0.56, carW * 1.08, 1);
 }
 
-function drawSpaceMissionModal(r) {
-  const { cx, boxH, boxY } = drawMissionModalPanel(r, 'hyperspace!', ['blue', 'white', 'purple'], CAR_PALETTES.purple.body, 'purple');
-  const portalY = boxY + boxH * 0.69;
-  drawPortal(cx, portalY, boxH * 0.23, 'purple', 7301);
+function drawDimensionMissionModal(r) {
+  const { cx, boxW, boxH, boxY } = drawMissionModalPanel(r, 'Dimension Wanderer', ['blue', 'white', 'purple'], CAR_PALETTES.purple.body, 'purple');
+  const y = boxY + boxH * 0.70;
+  const gap = boxW * 0.145;
+  const startX = cx - gap * 2;
+  for (let i = 0; i < DIMENSION_SEQUENCE.length; i++) {
+    const color = DIMENSION_SEQUENCE[i];
+    const palette = CAR_PALETTES[color];
+    ctx.save();
+    ctx.fillStyle = color === 'white' ? '#f7f6ef' : palette.body;
+    ctx.strokeStyle = i < dimensionProgress ? '#7dff9a' : 'rgba(255,255,255,0.70)';
+    ctx.lineWidth = Math.max(2, boxW * 0.008);
+    ctx.shadowColor = alphaHex(ctx.fillStyle, 0.45);
+    ctx.shadowBlur = boxW * 0.025;
+    ctx.beginPath();
+    ctx.arc(startX + gap * i, y, boxW * 0.043, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+  }
+  ctx.save();
+  ctx.font = `800 ${Math.max(9, boxW * 0.043)}px Arial, sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.fillStyle = 'rgba(255,255,255,0.78)';
+  ctx.fillText('Cross portals in this order', cx, boxY + boxH * 0.88);
+  ctx.restore();
 }
 
 function drawPausedModal(r) {
@@ -2024,8 +2116,8 @@ function drawPausedModal(r) {
     drawSaintRingMissionModal(r);
     return;
   }
-  if (pauseReason === 'purpleMission') {
-    drawSpaceMissionModal(r);
+  if (pauseReason === 'dimensionMission') {
+    drawDimensionMissionModal(r);
     return;
   }
   drawColorIntroModal(r);
@@ -2278,10 +2370,8 @@ function draw() {
 function handleTap() {
   if (gameState === 'paused') {
     if (!canCloseMissionModal()) return;
-    const closedReason = pauseReason;
     gameState = 'playing';
     pauseReason = null;
-    if (closedReason === 'purpleMission') startDreamHighway();
     return;
   }
   if (gameState === 'menu') {
