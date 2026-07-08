@@ -31,7 +31,7 @@
 const canvas = document.getElementById('gameCanvas');
 const ctx    = canvas.getContext('2d');
 // increase this version in any change in the code
-const GAME_VERSION = 'v0.5.11';
+const GAME_VERSION = 'v0.5.13';
 
 function resize() {
   // Portrait 9:16 ratio, fill the viewport
@@ -173,6 +173,9 @@ const ASSET_PATHS = {
   car_blue: 'img/car_blue.png',
   car_white: 'img/car_white.png',
   car_purple: 'img/car_purple.png',
+  modal1: 'img/modal1.png',
+  modal2: 'img/modal2.png',
+  modal3: 'img/modal3.png',
   obstacle_red: 'img/obstacle_red.png',
   ufo: 'img/ufo.png',
   coin_basic: 'img/coin_basic.png',
@@ -921,6 +924,20 @@ function drawSprite(name, x, y, w, h, options = {}) {
   ctx.drawImage(sprites[name], -w / 2, -h / 2, w, h);
   ctx.restore();
   return true;
+}
+
+function drawContainedSprite(name, x, y, maxW, maxH, options = {}) {
+  if (!spriteReady(name)) return false;
+
+  const aspect = spriteAspect(name, maxW / maxH);
+  let w = maxW;
+  let h = w / aspect;
+  if (h > maxH) {
+    h = maxH;
+    w = h * aspect;
+  }
+
+  return drawSprite(name, x, y, w, h, options);
 }
 
 function drawBackground(r) {
@@ -2068,6 +2085,7 @@ function drawMissionModalPanel(r, title, activeColors, accentColor = '#ffffff', 
 }
 
 function drawColorIntroModal(r) {
+  if (drawModalArt(r, 'modal1')) return;
   const { cx, boxW, boxH, boxY } = drawMissionModalPanel(r, 'tap current lane', ['blue'], CAR_PALETTES.blue.body, 'blue');
   const hintY = boxY + boxH * 0.68;
   drawTapCurrentLaneHint(cx - boxW * 0.12, hintY, boxW * 0.38, boxH * 0.38);
@@ -2075,6 +2093,7 @@ function drawColorIntroModal(r) {
 }
 
 function drawSaintRingMissionModal(r) {
+  if (drawModalArt(r, 'modal2')) return;
   const { cx, boxW, boxH, boxY } = drawMissionModalPanel(r, 'saint ring!', ['blue', 'white'], '#f7f6ef', 'white');
   const carW = boxW * 0.23;
   const carH = carW * 1.85;
@@ -2084,6 +2103,7 @@ function drawSaintRingMissionModal(r) {
 }
 
 function drawDimensionMissionModal(r) {
+  if (drawModalArt(r, 'modal3')) return;
   const { cx, boxW, boxH, boxY } = drawMissionModalPanel(r, 'Dimension Wanderer', ['blue', 'white', 'purple'], CAR_PALETTES.purple.body, 'purple');
   const y = boxY + boxH * 0.70;
   const gap = boxW * 0.145;
@@ -2109,6 +2129,18 @@ function drawDimensionMissionModal(r) {
   ctx.fillStyle = 'rgba(255,255,255,0.78)';
   ctx.fillText('Cross portals in this order', cx, boxY + boxH * 0.88);
   ctx.restore();
+}
+
+function drawModalArt(r, spriteName) {
+  ctx.fillStyle = 'rgba(0,0,0,0.72)';
+  ctx.fillRect(0, 0, r.W, r.H);
+
+  const maxW = r.W * 0.86;
+  const maxH = r.H * 0.86;
+  return drawContainedSprite(spriteName, r.W / 2, r.H / 2, maxW, maxH, {
+    shadowColor: 'rgba(0,0,0,0.58)',
+    shadowBlur: r.W * 0.04
+  });
 }
 
 function drawPausedModal(r) {
