@@ -41,7 +41,7 @@
 const canvas = document.getElementById('gameCanvas');
 const ctx    = canvas.getContext('2d');
 // increase this version in any change in the code
-const GAME_VERSION = 'v0.5.21';
+const GAME_VERSION = 'v0.5.22';
 let touchGestureActive = false;
 let resizeQueuedAfterTouch = false;
 
@@ -150,7 +150,7 @@ let missionUnlocked, purpleMissionCoinCount;
 let dreamHighway, dreamSpawnTimer, dreamPathTimer, dreamWaveId;
 let dimensionMissionActive, dimensionProgress, dimensionComplete, blackPortalTimer, blackPortalInterval;
 let colorIntroSeen, missionModalShownAt, pauseReason;
-let lastObstacleLane, sameLaneObstacleCount;
+let lastObstacleLane, sameLaneObstacleCount, lastRoadSpawnObstacle;
 let lastTouchTime = 0;
 let mouseSteeringActive = false;
 let touchStartPoint = null;
@@ -332,6 +332,7 @@ function initGame() {
   blackPortalInterval = randomBlackPortalInterval();
   lastObstacleLane = null;
   sameLaneObstacleCount = 0;
+  lastRoadSpawnObstacle = null;
 
   if (devSpace) {
     missionUnlocked = { blue: true, white: true, purple: true };
@@ -626,6 +627,7 @@ function registerColorChange() {
 
 function registerCollectedCoin() {
   if (!missionUnlocked || !missionUnlocked.white || missionUnlocked.purple) return;
+  if (activeWorld !== 'purple' || !saintRing) return;
   purpleMissionCoinCount++;
   if (purpleMissionCoinCount >= PURPLE_MISSION_COINS) completeMission('purple');
 }
@@ -719,9 +721,35 @@ function registerObstacleLane(lane) {
   }
 }
 
+function resetRoadObstaclePair() {
+  lastRoadSpawnObstacle = null;
+}
+
+function maybeSpawnSpecialCoinBetweenObstacles(nextObstacle) {
+  if (
+    !lastRoadSpawnObstacle ||
+    lastRoadSpawnObstacle.lane !== nextObstacle.lane ||
+    !isSpecialCoin()
+  ) {
+    return;
+  }
+
+  objects.push({
+    x: nextObstacle.x,
+    y: (lastRoadSpawnObstacle.y + nextObstacle.y) / 2,
+    type: 'collect',
+    size: nextObstacle.size,
+    lane: nextObstacle.lane,
+    special: true
+  });
+}
+
 function spawnObject() {
   const r    = roadMetrics();
-  if (Math.random() < EMPTY_SPAWN_PROBABILITY) return;
+  if (Math.random() < EMPTY_SPAWN_PROBABILITY) {
+    resetRoadObstaclePair();
+    return;
+  }
 
   let lane = Math.random() < 0.5 ? 0 : 1;
   const type = Math.random() < COIN_SPAWN_PROBABILITY ? 'collect' : 'obstacle';
@@ -731,12 +759,22 @@ function spawnObject() {
   if (type === 'obstacle') {
     const minGap = carDims().carH * OPPOSING_OBSTACLE_GAP_MULT;
     lane = pickObstacleLane(lane, y, minGap, r);
-    if (lane === null) return;
+    if (lane === null) {
+      resetRoadObstaclePair();
+      return;
+    }
   }
 
   const x = lane === 0 ? r.lane0 : r.lane1;
-  objects.push({ x, y, type, size, lane, special: type === 'collect' && isSpecialCoin() });
-  if (type === 'obstacle') registerObstacleLane(lane);
+  const obj = { x, y, type, size, lane, special: false };
+  objects.push(obj);
+  if (type === 'obstacle') {
+    maybeSpawnSpecialCoinBetweenObstacles(obj);
+    lastRoadSpawnObstacle = obj;
+    registerObstacleLane(lane);
+  } else {
+    resetRoadObstaclePair();
+  }
 }
 
 function spawnPortal() {
@@ -755,6 +793,7 @@ function spawnPortal() {
 
   const x = lane === 0 ? r.lane0 : r.lane1;
   objects.push({ x, y, type: 'portal', size, lane, color, seed });
+  resetRoadObstaclePair();
   return true;
 }
 
@@ -768,6 +807,7 @@ function spawnBlackPortal() {
   const seed = Math.floor(Math.random() * 100000);
   const x = lane === 0 ? r.lane0 : r.lane1;
   objects.push({ x, y, type: 'portal', size, lane, color: 'black', seed });
+  resetRoadObstaclePair();
   return true;
 }
 
