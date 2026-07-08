@@ -125,10 +125,10 @@ const devMode = queryParams.get('mode') === 'dev';
 const CAR_Y_FRAC          = 0.78;
 const LANE_LERP           = 0.14;
 // Empty slots give the road occasional breathing room. Remaining slots are 28% coins.
-const EMPTY_SPAWN_PROBABILITY = 0.05;
+const EMPTY_SPAWN_PROBABILITY = 0.025;
 const COIN_SPAWN_PROBABILITY = 0.28;
 const MAX_SAME_LANE_OBSTACLES = 3;
-const INITIAL_SPEED      = 4.8;
+const INITIAL_SPEED      = 5.2;
 const INITIAL_SPAWN_DISTANCE = 336;
 const SPEED_RAMP_BONUS   = 0.115;
 const COIN_SCORE = 10;
@@ -427,11 +427,11 @@ function spawnDreamUfo() {
   const fromLeft = Math.random() < 0.5;
   const size = r.W * (0.052 + Math.random() * 0.018);
   const y = -size * (1.2 + Math.random() * 3.5);
-  const x = fromLeft ? -size * 1.4 : r.W + size * 1.4;
-  const targetX = r.W * (0.18 + Math.random() * 0.64);
-  const travelFrames = 70 + Math.random() * 52;
+  const x = r.W * (0.18 + Math.random() * 0.64);
+  const targetX = x + (fromLeft ? 1 : -1) * r.W * (0.035 + Math.random() * 0.075);
+  const travelFrames = 90 + Math.random() * 60;
   const vx = (targetX - x) / travelFrames;
-  const vy = speed * (0.82 + Math.random() * 0.42);
+  const vy = speed * (1.00 + Math.random() * 0.48);
 
   objects.push({
     x,
@@ -1187,7 +1187,7 @@ function drawCoin(x, y, size, special = false) {
     ctx.restore();
   }
 
-  if (saintRing) {
+  if (saintRing && activeWorld === 'purple') {
     const ringPulse = 1 + Math.sin((frame + y) * 0.12) * 0.04;
     ctx.save();
     ctx.translate(x, y);
