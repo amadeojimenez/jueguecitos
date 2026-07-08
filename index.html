@@ -969,6 +969,12 @@ function drawSprite(name, x, y, w, h, options = {}) {
 function drawContainedSprite(name, x, y, maxW, maxH, options = {}) {
   if (!spriteReady(name)) return false;
 
+  const { w, h } = containedSpriteSize(name, maxW, maxH);
+
+  return drawSprite(name, x, y, w, h, options);
+}
+
+function containedSpriteSize(name, maxW, maxH) {
   const aspect = spriteAspect(name, maxW / maxH);
   let w = maxW;
   let h = w / aspect;
@@ -976,8 +982,7 @@ function drawContainedSprite(name, x, y, maxW, maxH, options = {}) {
     h = maxH;
     w = h * aspect;
   }
-
-  return drawSprite(name, x, y, w, h, options);
+  return { w, h };
 }
 
 function drawBackground(r) {
@@ -1941,7 +1946,22 @@ function drawMissionProgressBar() {
 function drawMenu(r) {
   ctx.fillStyle = '#000000';
   ctx.fillRect(0, 0, r.W, r.H);
+  const mainSprite = containedSpriteSize('main', r.W, r.H);
   drawContainedSprite('main', r.W / 2, r.H / 2, r.W, r.H);
+
+  const imageBottom = r.H / 2 + mainSprite.h / 2;
+  const bottomBandH = Math.max(0, r.H - imageBottom);
+  const versionY = bottomBandH > r.H * 0.02
+    ? imageBottom + bottomBandH * 0.56
+    : r.H - Math.max(12, r.H * 0.025);
+
+  ctx.save();
+  ctx.font = `800 ${Math.max(12, Math.min(17, r.W * 0.034))}px Arial, sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = 'rgba(255,255,255,0.78)';
+  ctx.fillText(GAME_VERSION, r.W / 2, versionY);
+  ctx.restore();
 }
 
 function nightFlickerAlpha() {
