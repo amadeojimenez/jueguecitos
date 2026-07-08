@@ -31,7 +31,7 @@
 const canvas = document.getElementById('gameCanvas');
 const ctx    = canvas.getContext('2d');
 // increase this version in any change in the code
-const GAME_VERSION = 'v0.5.9';
+const GAME_VERSION = 'v0.5.10';
 
 function resize() {
   // Portrait 9:16 ratio, fill the viewport
@@ -1734,25 +1734,23 @@ function drawMenu(r) {
 
   ctx.textAlign = 'center';
 
-  drawMenuScorePill(r, cx);
-
   ctx.save();
   ctx.strokeStyle = 'rgba(255,255,255,0.36)';
   ctx.lineWidth = Math.max(1, r.W * 0.004);
   ctx.beginPath();
-  ctx.moveTo(cx - r.W * 0.26, r.H * 0.166);
-  ctx.lineTo(cx - r.W * 0.15, r.H * 0.166);
-  ctx.moveTo(cx + r.W * 0.15, r.H * 0.166);
-  ctx.lineTo(cx + r.W * 0.26, r.H * 0.166);
+  ctx.moveTo(cx - r.W * 0.26, r.H * 0.098);
+  ctx.lineTo(cx - r.W * 0.15, r.H * 0.098);
+  ctx.moveTo(cx + r.W * 0.15, r.H * 0.098);
+  ctx.lineTo(cx + r.W * 0.26, r.H * 0.098);
   ctx.stroke();
   ctx.restore();
 
-  drawOutlinedText('LANE', cx, r.H * 0.165, title1, '#f4f4f4', 'rgba(0,0,0,0.82)', 0.20);
-  drawOutlinedText('DODGER', cx, r.H * 0.232, title2, '#ffc928', 'rgba(0,0,0,0.82)', 0.18);
+  drawOutlinedText('LANE', cx, r.H * 0.097, title1, '#f4f4f4', 'rgba(0,0,0,0.82)', 0.20);
+  drawOutlinedText('DODGER', cx, r.H * 0.164, title2, '#ffc928', 'rgba(0,0,0,0.82)', 0.18);
 
-  drawMenuMissionDots(r, cx, r.H * 0.330);
+  drawMenuMissionDots(r, cx, r.H * 0.272);
 
-  const missionY = r.H * 0.394;
+  const missionY = r.H * 0.336;
   drawMenuStar(contentX + contentW * 0.03, missionY, r.W * 0.013, '#35aef4');
   drawMenuStar(contentX + contentW * 0.095, missionY, r.W * 0.020, '#35aef4');
   drawMenuStar(contentX + contentW * 0.905, missionY, r.W * 0.020, '#9450ff');
@@ -1770,33 +1768,39 @@ function drawMenu(r) {
 
   const hintW = contentW * 0.95;
   const hintH = r.H * 0.066;
-  drawMenuPanel(cx - hintW / 2, r.H * 0.424, hintW, hintH, hintH * 0.34, 0.15);
+  drawMenuPanel(cx - hintW / 2, r.H * 0.380, hintW, hintH, hintH * 0.34, 0.15);
   ctx.save();
   ctx.font = `800 ${fSm * 1.04}px "Trebuchet MS", Arial, sans-serif`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillStyle = 'rgba(224,226,232,0.76)';
-  ctx.fillText('Aliens?   🛸 🛸🛸   Yes!', cx, r.H * 0.459);
+  ctx.fillText('Aliens?   🛸 🛸🛸   Yes!', cx, r.H * 0.415);
   // ctx.fillText('One weird end.', cx,0);
   ctx.restore();
 
   const legendW = contentW * 0.95;
-  const legendH = r.H * 0.229;
+  const legendH = r.H * 0.306;
   const legendX = cx - legendW / 2;
-  const legendY = r.H * 0.508;
+  const legendY = r.H * 0.476;
   drawMenuPanel(legendX, legendY, legendW, legendH, r.W * 0.032, 0.15);
 
-  const rowSize = r.W * 0.128;
+  const rowSize = r.W * 0.112;
   const iconX = legendX + legendW * 0.16;
-  const rowYs = [legendY + legendH * 0.22, legendY + legendH * 0.52, legendY + legendH * 0.81];
-  drawMenuLegendRow('obstacle', iconX, rowYs[0], rowSize, 'AVOID OBSTACLES', 'Game over on hit', '#ff5b45');
-  drawMenuLegendRow('coin', iconX, rowYs[1], rowSize, 'COLLECT COINS', '+10 points', '#ffc928');
-  drawMenuLegendRow('super', iconX, rowYs[2], rowSize, 'SUPER COINS', '+50 points', '#9450ff');
+  const rowYs = [
+    legendY + legendH * 0.145,
+    legendY + legendH * 0.385,
+    legendY + legendH * 0.625,
+    legendY + legendH * 0.865
+  ];
+  drawMenuLegendRow('switch', iconX, rowYs[0], rowSize, 'TAP TO SWITCH', 'Choose right lane', '#36aef4');
+  drawMenuLegendRow('obstacle', iconX, rowYs[1], rowSize, 'AVOID OBSTACLES', 'Game over on hit', '#ff5b45');
+  drawMenuLegendRow('coin', iconX, rowYs[2], rowSize, 'COLLECT COINS', '+10 points', '#ffc928');
+  drawMenuLegendRow('super', iconX, rowYs[3], rowSize, 'SUPER COINS', '+50 points', '#9450ff');
 
   ctx.save();
   ctx.strokeStyle = 'rgba(255,255,255,0.12)';
   ctx.lineWidth = Math.max(1, r.W * 0.003);
-  for (let i = 1; i < 3; i++) {
+  for (let i = 1; i < rowYs.length; i++) {
     ctx.beginPath();
     ctx.moveTo(legendX + legendW * 0.08, (rowYs[i - 1] + rowYs[i]) / 2);
     ctx.lineTo(legendX + legendW * 0.92, (rowYs[i - 1] + rowYs[i]) / 2);
@@ -1804,13 +1808,10 @@ function drawMenu(r) {
   }
   ctx.restore();
 
-  const carW = r.W * 0.145;
-  const carH = carW * 1.85;
-  drawCar(r.roadL + r.roadW * 0.235, r.H * 0.818, carW, carH, 'blue');
 
   const pulse = 0.94 + 0.06 * Math.sin(frame * 0.06);
   ctx.save();
-  ctx.translate(cx + r.W * 0.105, r.H * 0.802);
+  ctx.translate(cx, r.H * 0.850);
   ctx.scale(pulse, pulse);
   const btnW = r.W * 0.41, btnH = r.H * 0.082;
   const btn = ctx.createLinearGradient(0, -btnH / 2, 0, btnH / 2);
@@ -1837,22 +1838,15 @@ function drawMenu(r) {
   ctx.fillText('TAP TO START', 0, btnH * 0.04);
   ctx.restore();
 
-  ctx.font = `800 ${Math.max(10, r.H * 0.018)}px "Trebuchet MS", Arial, sans-serif`;
-  ctx.fillStyle = 'rgba(225,229,236,0.56)';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText('Steer left or right', cx, r.H * 0.925);
-  drawMenuChevron(cx - r.W * 0.145, r.H * 0.925, r.W * 0.044, '#35aef4', -1);
-  drawMenuChevron(cx + r.W * 0.145, r.H * 0.925, r.W * 0.044, '#9450ff', 1);
 
   if (highScore > 0) {
     ctx.font = `800 ${Math.max(9, r.H * 0.014)}px "Trebuchet MS", Arial, sans-serif`;
     ctx.fillStyle = 'rgba(255,201,40,0.72)';
-    ctx.fillText(`BEST ${highScore}`, cx, r.H * 0.957);
+    ctx.fillText(`BEST ${highScore}`, cx, r.H * 0.942);
   } else {
     ctx.font = `800 ${Math.max(8, r.H * 0.012)}px "Trebuchet MS", Arial, sans-serif`;
     ctx.fillStyle = 'rgba(255,255,255,0.34)';
-    ctx.fillText(GAME_VERSION, cx, r.H * 0.957);
+    ctx.fillText(GAME_VERSION, cx, r.H * 0.942);
   }
 }
 
@@ -2057,45 +2051,6 @@ function drawOutlinedText(text, x, y, size, fill, stroke = 'rgba(0,0,0,0.78)', s
   ctx.restore();
 }
 
-function drawMenuScorePill(r, cx) {
-  const label = 'SCORE ';
-  const value = String(score);
-  const size = Math.max(13, r.H * 0.027);
-  const pillH = size * 1.72;
-  const pillW = Math.max(r.W * 0.38, size * 7.1);
-  const x = cx - pillW / 2;
-  const y = r.H * 0.030;
-
-  ctx.save();
-  ctx.shadowColor = 'rgba(0,0,0,0.58)';
-  ctx.shadowBlur = r.W * 0.030;
-  ctx.shadowOffsetY = r.H * 0.006;
-  const panel = ctx.createLinearGradient(0, y, 0, y + pillH);
-  panel.addColorStop(0, 'rgba(12,16,18,0.98)');
-  panel.addColorStop(1, 'rgba(0,0,0,0.94)');
-  ctx.fillStyle = panel;
-  ctx.beginPath();
-  ctx.roundRect(x, y, pillW, pillH, pillH * 0.48);
-  ctx.fill();
-  ctx.shadowBlur = 0;
-  ctx.strokeStyle = 'rgba(255,255,255,0.14)';
-  ctx.lineWidth = Math.max(1, r.W * 0.003);
-  ctx.stroke();
-
-  ctx.font = `900 ${size}px "Arial Black", Impact, Arial, sans-serif`;
-  ctx.textBaseline = 'middle';
-  const textW = ctx.measureText(label + value).width;
-  const startX = cx - textW / 2;
-  ctx.textAlign = 'left';
-  ctx.fillStyle = '#f4f4f4';
-  ctx.shadowColor = 'rgba(255,255,255,0.18)';
-  ctx.shadowBlur = size * 0.12;
-  ctx.fillText(label, startX, y + pillH * 0.53);
-  ctx.fillStyle = '#ffc928';
-  ctx.fillText(value, startX + ctx.measureText(label).width, y + pillH * 0.53);
-  ctx.restore();
-}
-
 function drawMenuMissionDots(r, cx, y) {
   const dotR = Math.max(13, r.W * 0.038);
   const gap = r.W * 0.155;
@@ -2187,6 +2142,7 @@ function drawMenuPanel(x, y, w, h, radius, strokeAlpha = 0.16) {
 
 function drawMenuLegendRow(icon, x, y, size, title, subtitle, color) {
   if (icon === 'obstacle') drawObstacle(x, y, size * 0.56);
+  else if (icon === 'switch') drawMenuSwitchIcon(x, y, size, color);
   else drawCoin(x, y, size * 0.62, icon === 'super');
 
   ctx.save();
@@ -2204,24 +2160,33 @@ function drawMenuLegendRow(icon, x, y, size, title, subtitle, color) {
   ctx.restore();
 }
 
-function drawMenuChevron(x, y, size, color, direction = 1) {
+
+function drawMenuSwitchIcon(x, y, size, color) {
   ctx.save();
-  ctx.translate(x, y);
-  ctx.scale(direction, 1);
   ctx.strokeStyle = color;
+  ctx.fillStyle = alphaHex(color, 0.18);
   ctx.shadowColor = alphaHex(color, 0.42);
-  ctx.shadowBlur = size * 0.18;
-  ctx.lineWidth = Math.max(3, size * 0.12);
+  ctx.shadowBlur = size * 0.14;
+  ctx.lineWidth = Math.max(2, size * 0.065);
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
-  for (let i = 0; i < 2; i++) {
-    const ox = i * size * 0.30;
-    ctx.beginPath();
-    ctx.moveTo(-size * 0.22 + ox, -size * 0.28);
-    ctx.lineTo(size * 0.08 + ox, 0);
-    ctx.lineTo(-size * 0.22 + ox, size * 0.28);
-    ctx.stroke();
-  }
+
+  ctx.beginPath();
+  ctx.arc(x, y, size * 0.25, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.moveTo(x - size * 0.20, y + size * 0.38);
+  ctx.quadraticCurveTo(x + size * 0.10, y + size * 0.12, x + size * 0.33, y - size * 0.22);
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.moveTo(x + size * 0.33, y - size * 0.22);
+  ctx.lineTo(x + size * 0.14, y - size * 0.20);
+  ctx.moveTo(x + size * 0.33, y - size * 0.22);
+  ctx.lineTo(x + size * 0.27, y - size * 0.04);
+  ctx.stroke();
   ctx.restore();
 }
 
