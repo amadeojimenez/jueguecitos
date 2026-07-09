@@ -41,7 +41,7 @@
 const canvas = document.getElementById('gameCanvas');
 const ctx    = canvas.getContext('2d');
 // increase this version in any change in the code
-const GAME_VERSION = 'v0.5.24';
+const GAME_VERSION = 'v0.5.26';
 let touchGestureActive = false;
 let resizeQueuedAfterTouch = false;
 
@@ -151,6 +151,7 @@ let missionUnlocked, purpleMissionCoinCount;
 let dreamHighway, dreamSpawnTimer, dreamPathTimer, dreamWaveId;
 let dimensionMissionActive, dimensionProgress, dimensionComplete, blackPortalTimer, blackPortalInterval;
 let colorIntroSeen, missionModalShownAt, pauseReason;
+let pendingMissionModalReason, pendingMissionModalAt, missionProgressCompleteAt, missionProgressCompleteFill;
 let lastObstacleLane, sameLaneObstacleCount, lastRoadSpawnObstacle;
 let lastTouchTime = 0;
 let mouseSteeringActive = false;
@@ -205,6 +206,7 @@ const PURPLE_FLIP_WARNING_FRAMES = 60;
 const PURPLE_FLIP_DURATION_FRAMES = 300;
 const MISSION_MODAL_MIN_MS = 600;
 const MISSION_SYMBOL_ANIM_MS = 760;
+const MISSION_PROGRESS_COMPLETE_FLASH_MS = 520;
 const DREAM_LERP = 0.24;
 const DREAM_SCROLL_SPEED = 5.3;
 const DREAM_COIN_PATH_INTERVAL = 78;
@@ -334,6 +336,10 @@ function initGame() {
   colorIntroSeen = devMode;
   missionModalShownAt = 0;
   pauseReason = null;
+  pendingMissionModalReason = null;
+  pendingMissionModalAt = 0;
+  missionProgressCompleteAt = 0;
+  missionProgressCompleteFill = CAR_PALETTES.blue.body;
   selectedCarColor = devWorld || 'blue';
   activeWorld = devWorld || 'blue';
   saintRing = false;
@@ -425,8 +431,9 @@ function addScore(points) {
 
 function completeMission(color) {
   if (!missionUnlocked || missionUnlocked[color]) return;
+  triggerMissionProgressComplete(missionProgressState().fill);
   missionUnlocked[color] = true;
-  if (color === 'white') showMissionModal('whiteMission');
+  if (color === 'white') queueMissionModal('whiteMission');
   if (color === 'purple') startDimensionMission();
 }
 
@@ -436,7 +443,7 @@ function startDimensionMission() {
   dimensionComplete = false;
   blackPortalTimer = 0;
   blackPortalInterval = randomBlackPortalInterval();
-  showMissionModal('dimensionMission');
+  queueMissionModal('dimensionMission');
 }
 
 function completeDimensionMission() {
@@ -445,6 +452,7 @@ function completeDimensionMission() {
   dimensionComplete = true;
   blackPortalTimer = 0;
   blackPortalInterval = randomBlackPortalInterval();
+  triggerMissionProgressComplete('#7dff9a');
 }
 
 function registerDimensionPortal(color) {
@@ -474,10 +482,32 @@ function removeClosestObstacleInFrontOfCar() {
 }
 
 function showMissionModal(reason) {
+  pendingMissionModalReason = null;
+  pendingMissionModalAt = 0;
   removeClosestObstacleInFrontOfCar();
   pauseReason = reason;
   missionModalShownAt = performance.now();
   gameState = 'paused';
+}
+
+function triggerMissionProgressComplete(fill) {
+  missionProgressCompleteAt = performance.now();
+  missionProgressCompleteFill = fill || currentTheme().hudAccent;
+}
+
+function queueMissionModal(reason) {
+  removeClosestObstacleInFrontOfCar();
+  pauseReason = null;
+  missionModalShownAt = 0;
+  pendingMissionModalReason = reason;
+  pendingMissionModalAt = performance.now() + MISSION_PROGRESS_COMPLETE_FLASH_MS;
+  gameState = 'paused';
+}
+
+function processPendingMissionModal() {
+  if (!pendingMissionModalReason) return;
+  if (performance.now() < pendingMissionModalAt) return;
+  showMissionModal(pendingMissionModalReason);
 }
 
 function clampDreamX(x) {
@@ -712,7 +742,7 @@ function collapsePortal(portal) {
 // ─── Car Dimensions (top-down view) ─────────────────────────────────────────
 function carDims() {
   const r   = roadMetrics();
-  const carScale = dreamHighway ? 0.26 : 0.52;
+  const carScale = dreamHighway ? 0.195 : 0.39;
   const carW = r.laneW * carScale;
   const carH = carW * 1.85;
   const carY = canvas.height * CAR_Y_FRAC;
@@ -866,6 +896,7 @@ function update() {
   }
 
   maybeShowColorIntro();
+  if (gameState !== 'playing') return;
   updateNightEffect();
   updatePurpleFlipEffect();
 
@@ -876,6 +907,7 @@ function update() {
 
   // Score every 30 frames (~½ s at 60 fps)
   if (++scoreTimer >= 30) { addScore(1); scoreTimer = 0; }
+  if (gameState !== 'playing') return;
 
   // Difficulty ramp every ~5 s. Spawn spacing is tracked in pixels so
   // higher velocity does not stretch the vertical distance between spawns.
@@ -927,6 +959,7 @@ function update() {
       } else if (objects[i].type === 'collect') {
         collectCoin(objects[i]);
         objects.splice(i, 1);
+        if (gameState !== 'playing') return;
       } else if (objects[i].type === 'portal') {
         if (objects[i].color === 'black') {
           collapsePortal(objects[i]);
@@ -959,7 +992,7 @@ function updateEffects() {
 function maybeShowColorIntro() {
   if (!colorIntroSeen && colorFeatureUnlocked()) {
     colorIntroSeen = true;
-    showMissionModal('colorIntro');
+    queueMissionModal('colorIntro');
   }
 }
 
@@ -1807,49 +1840,51 @@ function drawCar(cx, cy, carW, carH, color = selectedCarColor) {
   ctx.restore();
 }
 
-function drawHUD() {
+function drawScoreCounter() {
   const theme = currentTheme();
-  const fSize = Math.max(14, canvas.height * 0.033);
-  const label = 'SCORE ';
+  const fSize = Math.max(13, canvas.height * 0.026);
   const value = String(score);
   const fontFamily = '"Arial Black", "Trebuchet MS", Arial, sans-serif';
-  const y = canvas.height * 0.052;
+  const padX = Math.max(9, canvas.width * 0.026);
+  const pillH = Math.max(25, fSize * 1.55);
+  const pillX = canvas.width * 0.024;
+  const pillY = canvas.height * 0.022;
+  const textY = pillY + pillH * 0.52;
 
   ctx.save();
   ctx.font = `900 ${fSize}px ${fontFamily}`;
-  const labelW = ctx.measureText(label).width;
   const valueW = ctx.measureText(value).width;
-  const padX = canvas.width * 0.045;
-  const pillW = Math.max(canvas.width * 0.38, labelW + valueW + padX * 2);
-  const pillH = Math.max(30, fSize * 1.65);
-  const pillX = canvas.width / 2 - pillW / 2;
-  const pillY = y - pillH * 0.52;
+  const pillW = Math.max(canvas.width * 0.135, valueW + padX * 2);
 
   ctx.shadowColor = 'rgba(0,0,0,0.34)';
-  ctx.shadowBlur = canvas.width * 0.022;
-  ctx.shadowOffsetY = 2;
+  ctx.shadowBlur = canvas.width * 0.018;
+  ctx.shadowOffsetY = 1.5;
   ctx.fillStyle = theme.hudPanel;
   ctx.beginPath();
-  ctx.roundRect(pillX, pillY, pillW, pillH, pillH / 2);
+  ctx.roundRect(pillX, pillY, pillW, pillH, pillH * 0.38);
   ctx.fill();
 
   ctx.shadowBlur = 0;
   ctx.shadowOffsetY = 0;
-  ctx.strokeStyle = 'rgba(255,255,255,0.14)';
+  ctx.strokeStyle = 'rgba(255,255,255,0.13)';
   ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.roundRect(pillX, pillY, pillW, pillH, pillH * 0.38);
   ctx.stroke();
 
-  ctx.textAlign = 'left';
+  ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillStyle = theme.hud;
-  ctx.fillText(label, pillX + padX, y);
   ctx.fillStyle = theme.hudAccent;
-  ctx.fillText(value, pillX + padX + labelW, y);
+  ctx.fillText(value, pillX + pillW / 2, textY);
   ctx.restore();
+}
+
+function drawHUD() {
+  drawMissionProgressBar();
+  drawScoreCounter();
 
   drawColorStatus();
   drawSaintRingStatus();
-  drawMissionProgressBar();
 }
 
 function easeOutBack(t) {
@@ -2001,6 +2036,17 @@ function drawSaintRingStatus() {
 }
 
 function missionProgressState() {
+  const completeAge = missionProgressCompleteAt
+    ? performance.now() - missionProgressCompleteAt
+    : Infinity;
+  if (completeAge < MISSION_PROGRESS_COMPLETE_FLASH_MS) {
+    return {
+      progress: 1,
+      fill: missionProgressCompleteFill,
+      completeAge
+    };
+  }
+
   if (!missionUnlocked) {
     return { progress: 0, fill: '#ffc928' };
   }
@@ -2043,21 +2089,32 @@ function drawMissionProgressBar() {
 
   const theme = currentTheme();
   const status = missionProgressState();
-  const barW = Math.max(11, canvas.width * 0.028);
-  const barH = canvas.height * 0.46;
-  const barX = canvas.width - barW - canvas.width * 0.020;
-  const barY = canvas.height * 0.30;
-  const radius = barW * 0.50;
-  const inset = Math.max(2, barW * 0.20);
+  const progress = clamp01(status.progress);
+  const barW = Math.min(canvas.width * 0.56, Math.max(canvas.width * 0.46, 178));
+  const barH = Math.max(17, canvas.height * 0.027);
+  const barX = canvas.width / 2 - barW / 2;
+  const barY = canvas.height * 0.030;
+  const radius = barH * 0.50;
+  const inset = Math.max(3, barH * 0.22);
   const innerX = barX + inset;
   const innerY = barY + inset;
   const innerW = barW - inset * 2;
   const innerH = barH - inset * 2;
-  const fillH = innerH * status.progress;
+  const fillW = innerW * progress;
+  const now = performance.now();
+  const glow = 0.18 + progress * 0.62;
+  const completeProgress = Number.isFinite(status.completeAge)
+    ? clamp01(status.completeAge / MISSION_PROGRESS_COMPLETE_FLASH_MS)
+    : 1;
+  const completeBloom = 1 - completeProgress;
 
   ctx.save();
-  ctx.shadowColor = 'rgba(0,0,0,0.30)';
-  ctx.shadowBlur = barW * 0.75;
+  ctx.shadowColor = Number.isFinite(status.completeAge)
+    ? alphaHex(status.fill, 0.66 * completeBloom)
+    : 'rgba(0,0,0,0.32)';
+  ctx.shadowBlur = Number.isFinite(status.completeAge)
+    ? barH * (1.2 + completeBloom * 2.6)
+    : barH * 0.75;
   ctx.shadowOffsetY = 1.5;
   ctx.fillStyle = theme.hudPanel;
   ctx.beginPath();
@@ -2071,15 +2128,50 @@ function drawMissionProgressBar() {
   ctx.roundRect(innerX, innerY, innerW, innerH, innerW / 2);
   ctx.fill();
 
-  if (fillH > 0.5) {
-    const fillY = innerY + innerH - fillH;
-    const fillGradient = ctx.createLinearGradient(0, innerY + innerH, 0, innerY);
-    fillGradient.addColorStop(0, alphaHex(status.fill, 0.58));
-    fillGradient.addColorStop(1, status.fill);
+  if (fillW > 0.5) {
+    const fillGradient = ctx.createLinearGradient(innerX, 0, innerX + innerW, 0);
+    fillGradient.addColorStop(0, alphaHex(status.fill, 0.48 + glow * 0.18));
+    fillGradient.addColorStop(Math.max(0.1, progress * 0.70), status.fill);
+    fillGradient.addColorStop(1, alphaHex('#ffffff', 0.36 + progress * 0.24));
+    ctx.shadowColor = alphaHex(status.fill, 0.26 + progress * 0.34);
+    ctx.shadowBlur = barH * (0.45 + progress * 0.80);
     ctx.fillStyle = fillGradient;
     ctx.beginPath();
-    ctx.roundRect(innerX, fillY, innerW, fillH, innerW / 2);
+    ctx.roundRect(innerX, innerY, fillW, innerH, innerH / 2);
     ctx.fill();
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.roundRect(innerX, innerY, fillW, innerH, innerH / 2);
+    ctx.clip();
+    const sheenW = innerW * 0.24;
+    const sheenX = innerX - sheenW + ((now / 950) % 1) * (innerW + sheenW * 2);
+    const sheen = ctx.createLinearGradient(sheenX, 0, sheenX + sheenW, 0);
+    sheen.addColorStop(0, 'rgba(255,255,255,0)');
+    sheen.addColorStop(0.48, `rgba(255,255,255,${0.08 + progress * 0.13})`);
+    sheen.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = sheen;
+    ctx.fillRect(sheenX, innerY, sheenW, innerH);
+    ctx.restore();
+  }
+
+  if (Number.isFinite(status.completeAge)) {
+    ctx.globalAlpha = completeBloom * 0.65;
+    ctx.shadowColor = alphaHex(status.fill, 0.74);
+    ctx.shadowBlur = barH * 2.2;
+    ctx.strokeStyle = alphaHex(status.fill, 0.88);
+    ctx.lineWidth = Math.max(2, barH * 0.16);
+    ctx.beginPath();
+    ctx.roundRect(
+      barX - barH * completeProgress,
+      barY - barH * 0.34 * completeBloom,
+      barW + barH * 2 * completeProgress,
+      barH + barH * 0.68 * completeBloom,
+      radius + barH * 0.34
+    );
+    ctx.stroke();
+    ctx.globalAlpha = 1;
   }
 
   ctx.strokeStyle = 'rgba(255,255,255,0.16)';
@@ -2578,7 +2670,7 @@ function draw() {
     drawHUD();
   } else if (gameState === 'paused') {
     drawHUD();
-    drawPausedModal(r);
+    if (!pendingMissionModalReason) drawPausedModal(r);
   } else if (gameState === 'menu') {
     drawMenu(r);
   } else if (gameState === 'gameover') {
@@ -2591,6 +2683,7 @@ function draw() {
 
 function handleTap() {
   if (gameState === 'paused') {
+    if (pendingMissionModalReason) return;
     if (!canCloseMissionModal()) return;
     gameState = 'playing';
     pauseReason = null;
@@ -2861,7 +2954,11 @@ let loopAccumulatorMs = 0;
 
 function stepGameFrame() {
   frame++;
-  if (gameState === 'playing') update();
+  processPendingMissionModal();
+  if (gameState === 'playing') {
+    update();
+    if (gameState === 'playing') processPendingMissionModal();
+  }
   else if (gameState !== 'paused') roadOffset += 1.5;    // animate road in menu/gameover background
 }
 
