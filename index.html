@@ -53,7 +53,7 @@
 const canvas = document.getElementById('gameCanvas');
 const ctx    = canvas.getContext('2d');
 // increase this version in any change in the code
-const GAME_VERSION = 'v0.5.27';
+const GAME_VERSION = 'v0.5.31';
 let touchGestureActive = false;
 let resizeQueuedAfterTouch = false;
 
@@ -170,6 +170,15 @@ let mouseSteeringActive = false;
 let touchStartPoint = null;
 let touchMoved = false;
 let touchLaneChangedOnStart = false;
+let menuPresentationImageBounds = null;
+let presentationButtonBounds = null;
+let presentationCloseBounds = null;
+let presentationFrameBounds = null;
+let presentationOverlayOpen = false;
+let presentationSlideIndex = 0;
+let presentationPrevSlideIndex = null;
+let presentationSlideStartedAt = 0;
+let presentationTransitionStartedAt = 0;
 
 resize();
 
@@ -228,6 +237,9 @@ const DIMENSION_SEQUENCE = ['blue', 'white', 'purple', 'white', 'blue'];
 const BLACK_PORTAL_MIN_INTERVAL = 210;
 const BLACK_PORTAL_MAX_INTERVAL = 420;
 const TOUCH_TAP_MAX_DISTANCE = 16;
+const PRESENTATION_SLIDES = ['p1', 'p2', 'p3', 'p4'];
+const PRESENTATION_SLIDE_MS = 3200;
+const PRESENTATION_FADE_MS = 560;
 const FIXED_TIMESTEP_MS = 1000 / 60;
 const MAX_FRAME_DELTA_MS = 100;
 // Hitbox is smaller than the visual to feel fair when near-missing
@@ -250,6 +262,10 @@ const ASSET_PATHS = {
   car_white: 'img/car_white.png',
   car_purple: 'img/car_purple.png',
   main: 'img/main.png',
+  p1: 'img/p1.png',
+  p2: 'img/p2.png',
+  p3: 'img/p3.png',
+  p4: 'img/p4.png',
   modal1: 'img/modal1.png',
   modal2: 'img/modal2.png',
   modal3: 'img/modal3.png',
@@ -1156,6 +1172,71 @@ function containedSpriteSize(name, maxW, maxH) {
     w = h * aspect;
   }
   return { w, h };
+}
+
+function easeOutCubic(t) {
+  const clamped = Math.max(0, Math.min(1, t));
+  return 1 - Math.pow(1 - clamped, 3);
+}
+
+function pointInRect(point, rect) {
+  return !!point && !!rect &&
+    point.x >= rect.x &&
+    point.x <= rect.x + rect.w &&
+    point.y >= rect.y &&
+    point.y <= rect.y + rect.h;
+}
+
+function presentationAspect() {
+  let minAspect = Infinity;
+  for (const slide of PRESENTATION_SLIDES) {
+    if (!spriteReady(slide)) continue;
+    minAspect = Math.min(minAspect, spriteAspect(slide));
+  }
+  return Number.isFinite(minAspect) ? minAspect : 500 / 674;
+}
+
+function openPresentationSlideshow() {
+  const now = performance.now();
+  presentationOverlayOpen = true;
+  presentationSlideIndex = 0;
+  presentationPrevSlideIndex = null;
+  presentationSlideStartedAt = now;
+  presentationTransitionStartedAt = now;
+}
+
+function closePresentationSlideshow() {
+  presentationOverlayOpen = false;
+  presentationPrevSlideIndex = null;
+  presentationCloseBounds = null;
+  presentationFrameBounds = null;
+}
+
+function advancePresentationSlide(now = performance.now(), direction = 1) {
+  if (direction > 0 && presentationSlideIndex >= PRESENTATION_SLIDES.length - 1) {
+    closePresentationSlideshow();
+    return;
+  }
+
+  presentationPrevSlideIndex = presentationSlideIndex;
+  presentationSlideIndex = (presentationSlideIndex + direction + PRESENTATION_SLIDES.length) % PRESENTATION_SLIDES.length;
+  presentationSlideStartedAt = now;
+  presentationTransitionStartedAt = now;
+}
+
+function updatePresentationSlideshow(now) {
+  if (!presentationOverlayOpen) return;
+  if (now - presentationSlideStartedAt >= PRESENTATION_SLIDE_MS) advancePresentationSlide(now, 1);
+}
+
+function drawPresentationImage(spriteName, cx, cy, maxW, maxH, alpha = 1, offsetX = 0) {
+  if (!spriteReady(spriteName)) return false;
+  const { w, h } = containedSpriteSize(spriteName, maxW, maxH);
+  return drawSprite(spriteName, cx + offsetX, cy, w, h, {
+    alpha,
+    shadowColor: 'rgba(0,0,0,0)',
+    shadowBlur: 0
+  });
 }
 
 function drawBackground(r) {
@@ -2215,11 +2296,150 @@ function drawMissionProgressBar() {
 
 // ─── Overlay Screens ─────────────────────────────────────────────────────────
 
+function drawPresentationHelpButton(mainBounds, r) {
+  const radius = Math.max(13, Math.min(20, r.W * 0.045));
+  const cx = mainBounds.x + mainBounds.w - radius * 1.45;
+  const cy = mainBounds.y + radius * 1.45;
+  presentationButtonBounds = {
+    x: cx - radius,
+    y: cy - radius,
+    w: radius * 2,
+    h: radius * 2
+  };
+
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,0.45)';
+  ctx.shadowBlur = radius * 0.55;
+  ctx.fillStyle = 'rgba(0,0,0,0.90)';
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = 'rgba(255,255,255,0.58)';
+  ctx.lineWidth = Math.max(1, radius * 0.10);
+  ctx.stroke();
+
+  ctx.font = `900 ${radius * 1.25}px Arial, sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillStyle = '#ffffff';
+  const questionMetrics = ctx.measureText('?');
+  const questionY = cy + (questionMetrics.actualBoundingBoxAscent - questionMetrics.actualBoundingBoxDescent) / 2;
+  ctx.fillText('?', cx, questionY);
+  ctx.restore();
+}
+
+function drawPresentationOverlay(r) {
+  const now = performance.now();
+  updatePresentationSlideshow(now);
+
+  const aspect = presentationAspect();
+  const maxFrameW = r.W * 0.88;
+  const maxFrameH = r.H * 0.80;
+  let frameW = maxFrameW;
+  let frameH = frameW / aspect;
+  if (frameH > maxFrameH) {
+    frameH = maxFrameH;
+    frameW = frameH * aspect;
+  }
+
+  const frameX = (r.W - frameW) / 2;
+  const frameY = (r.H - frameH) / 2;
+  const radius = Math.max(8, r.W * 0.026);
+  presentationFrameBounds = { x: frameX, y: frameY, w: frameW, h: frameH };
+
+  ctx.save();
+  ctx.fillStyle = 'rgba(0,0,0,0.86)';
+  ctx.fillRect(0, 0, r.W, r.H);
+
+  ctx.fillStyle = '#050505';
+  ctx.strokeStyle = 'rgba(255,255,255,0.16)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.roundRect(frameX, frameY, frameW, frameH, radius);
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.roundRect(frameX, frameY, frameW, frameH, radius);
+  ctx.clip();
+
+  const currentSlide = PRESENTATION_SLIDES[presentationSlideIndex];
+  const slideCx = frameX + frameW / 2;
+  const slideCy = frameY + frameH / 2;
+  const progress = presentationPrevSlideIndex === null
+    ? 1
+    : easeOutCubic((now - presentationTransitionStartedAt) / PRESENTATION_FADE_MS);
+  const travel = frameW * 0.13;
+
+  if (presentationPrevSlideIndex !== null && progress < 1) {
+    const previousSlide = PRESENTATION_SLIDES[presentationPrevSlideIndex];
+    drawPresentationImage(previousSlide, slideCx, slideCy, frameW, frameH, 1 - progress, -travel * progress);
+  } else {
+    presentationPrevSlideIndex = null;
+  }
+
+  const currentOffset = presentationPrevSlideIndex === null ? 0 : travel * (1 - progress);
+  drawPresentationImage(currentSlide, slideCx, slideCy, frameW, frameH, progress, currentOffset);
+  ctx.restore();
+
+  const closeR = Math.max(14, Math.min(22, r.W * 0.050));
+  const closeCx = Math.min(r.W - closeR * 1.25, frameX + frameW - closeR * 0.45);
+  const closeCy = Math.max(closeR * 1.25, frameY + closeR * 0.45);
+  presentationCloseBounds = {
+    x: closeCx - closeR,
+    y: closeCy - closeR,
+    w: closeR * 2,
+    h: closeR * 2
+  };
+
+  ctx.shadowColor = 'rgba(0,0,0,0.55)';
+  ctx.shadowBlur = closeR * 0.5;
+  ctx.fillStyle = 'rgba(0,0,0,0.92)';
+  ctx.beginPath();
+  ctx.arc(closeCx, closeCy, closeR, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = 'rgba(255,255,255,0.50)';
+  ctx.lineWidth = Math.max(1, closeR * 0.08);
+  ctx.stroke();
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = Math.max(2, closeR * 0.12);
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(closeCx - closeR * 0.34, closeCy - closeR * 0.34);
+  ctx.lineTo(closeCx + closeR * 0.34, closeCy + closeR * 0.34);
+  ctx.moveTo(closeCx + closeR * 0.34, closeCy - closeR * 0.34);
+  ctx.lineTo(closeCx - closeR * 0.34, closeCy + closeR * 0.34);
+  ctx.stroke();
+
+  const dotY = Math.min(r.H - r.H * 0.045, frameY + frameH + Math.max(15, r.H * 0.027));
+  const dotGap = Math.max(11, r.W * 0.032);
+  const dotR = Math.max(3, r.W * 0.009);
+  const dotsStart = r.W / 2 - dotGap * (PRESENTATION_SLIDES.length - 1) / 2;
+  for (let i = 0; i < PRESENTATION_SLIDES.length; i++) {
+    ctx.beginPath();
+    ctx.arc(dotsStart + i * dotGap, dotY, dotR, 0, Math.PI * 2);
+    ctx.fillStyle = i === presentationSlideIndex ? '#ffffff' : 'rgba(255,255,255,0.30)';
+    ctx.fill();
+  }
+
+  ctx.restore();
+}
+
 function drawMenu(r) {
   ctx.fillStyle = '#000000';
   ctx.fillRect(0, 0, r.W, r.H);
   const mainSprite = containedSpriteSize('main', r.W, r.H);
+  menuPresentationImageBounds = {
+    x: r.W / 2 - mainSprite.w / 2,
+    y: r.H / 2 - mainSprite.h / 2,
+    w: mainSprite.w,
+    h: mainSprite.h
+  };
   drawContainedSprite('main', r.W / 2, r.H / 2, r.W, r.H);
+  drawPresentationHelpButton(menuPresentationImageBounds, r);
 
   const imageBottom = r.H / 2 + mainSprite.h / 2;
   const bottomBandH = Math.max(0, r.H - imageBottom);
@@ -2234,6 +2454,8 @@ function drawMenu(r) {
   ctx.fillStyle = 'rgba(255,255,255,0.78)';
   ctx.fillText(GAME_VERSION, r.W / 2, versionY);
   ctx.restore();
+
+  if (presentationOverlayOpen) drawPresentationOverlay(r);
 }
 
 function nightFlickerAlpha() {
@@ -2721,11 +2943,13 @@ function handleTap() {
     return;
   }
   if (gameState === 'menu') {
+    closePresentationSlideshow();
     gameState = 'playing';
     initGame();
     return;
   }
   if (gameState === 'gameover') {
+    closePresentationSlideshow();
     gameState = 'menu';
     dreamHighway = false;
     activeWorld = 'blue';
@@ -2738,6 +2962,52 @@ function handleTap() {
     if (dreamHighway) return;
     setPlayerLane(playerLane === 0 ? 1 : 0);
   }
+}
+
+function handlePresentationTap(point) {
+  if (gameState !== 'menu') return false;
+
+  if (presentationOverlayOpen) {
+    if (pointInRect(point, presentationCloseBounds)) {
+      closePresentationSlideshow();
+      return true;
+    }
+
+    if (pointInRect(point, presentationFrameBounds)) {
+      advancePresentationSlide(performance.now(), 1);
+      return true;
+    }
+
+    return true;
+  }
+
+  if (pointInRect(point, presentationButtonBounds)) {
+    openPresentationSlideshow();
+    return true;
+  }
+
+  return false;
+}
+
+function handlePresentationKey(key) {
+  if (gameState !== 'menu' || !presentationOverlayOpen) return false;
+
+  if (key === 'Escape') {
+    closePresentationSlideshow();
+    return true;
+  }
+
+  if (key === 'ArrowLeft') {
+    advancePresentationSlide(performance.now(), -1);
+    return true;
+  }
+
+  if (key === 'ArrowRight' || key === 'Enter' || key === ' ') {
+    advancePresentationSlide(performance.now(), 1);
+    return true;
+  }
+
+  return true;
 }
 
 function setPlayerLane(lane) {
@@ -2828,7 +3098,13 @@ function handlePointerPress(point) {
     return;
   }
 
-  if (gameState === 'menu' || gameState === 'gameover') {
+  if (gameState === 'menu') {
+    if (handlePresentationTap(point)) return;
+    handleTap();
+    return;
+  }
+
+  if (gameState === 'gameover') {
     handleTap();
     return;
   }
@@ -2845,7 +3121,13 @@ function handleTouchEnd(end) {
     return;
   }
 
-  if (gameState === 'menu' || gameState === 'gameover') {
+  if (gameState === 'menu') {
+    if (handlePresentationTap(end)) return;
+    handleTap();
+    return;
+  }
+
+  if (gameState === 'gameover') {
     handleTap();
     return;
   }
@@ -2950,6 +3232,11 @@ window.addEventListener('blur', () => {
 });
 
 window.addEventListener('keydown', (e) => {
+  if (handlePresentationKey(e.key)) {
+    e.preventDefault();
+    return;
+  }
+
   if (e.key === ' ') {
     e.preventDefault();
     if (gameState === 'playing' && !dreamHighway && colorFeatureUnlocked()) cycleCarColor();
