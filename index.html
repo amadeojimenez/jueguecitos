@@ -4,6 +4,18 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
   <title>Lane Dodger</title>
+  <meta name="description" content="Dodge obstacles, grab coins and race through spacetime." />
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="Lane Dodger" />
+  <meta property="og:description" content="Dodge red obstacles, grab coins, and race through color-shifting portals in a fast top-down arcade sprint." />
+  <meta property="og:image" content="img/share.png" />
+  <meta property="og:image:width" content="400" />
+  <meta property="og:image:height" content="267" />
+  <meta property="og:image:alt" content="Lane Dodger game preview" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Lane Dodger" />
+  <meta name="twitter:description" content="Dodge red obstacles, grab coins, and race through color-shifting portals in a fast top-down arcade sprint." />
+  <meta name="twitter:image" content="img/share.png" />
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body {
@@ -41,7 +53,7 @@
 const canvas = document.getElementById('gameCanvas');
 const ctx    = canvas.getContext('2d');
 // increase this version in any change in the code
-const GAME_VERSION = 'v0.5.26';
+const GAME_VERSION = 'v0.5.27';
 let touchGestureActive = false;
 let resizeQueuedAfterTouch = false;
 
@@ -188,6 +200,7 @@ const MAX_SPEED          = 16;
 const OPPOSING_OBSTACLE_GAP_MULT = 1.3;
 const COLOR_UNLOCK_SCORE = 200;
 const WHITE_MISSION_COLOR_SWITCHES = 50;
+const SAINT_RING_RECHARGE_COLOR_SWITCHES = 15;
 const PURPLE_MISSION_COINS = 20;
 const COLOR_ORDER        = ['blue', 'white', 'purple'];
 const devWorld = devMode && COLOR_ORDER.includes(requestedDevWorld) ? requestedDevWorld : null;
@@ -397,7 +410,7 @@ function setActiveWorld(world) {
   const previousWorld = activeWorld;
   if (
     missionUnlocked &&
-    !missionUnlocked.white &&
+    !saintRing &&
     activeWorld === 'white' &&
     world !== 'white'
   ) {
@@ -660,6 +673,7 @@ function endGame() {
 
 function breakSaintRing(obj) {
   saintRing = false;
+  whiteMissionColorSwaps = 0;
   effects.push({
     x: obj.x,
     y: obj.y,
@@ -671,15 +685,23 @@ function breakSaintRing(obj) {
 }
 
 function registerColorChange() {
-  if (!missionUnlocked || missionUnlocked.white) return;
+  if (!missionUnlocked || (missionUnlocked.white && saintRing)) return;
   if (gameState !== 'playing' || dreamHighway) return;
   if (activeWorld !== 'white') return;
 
+  const requiredColorSwaps = missionUnlocked.white
+    ? SAINT_RING_RECHARGE_COLOR_SWITCHES
+    : WHITE_MISSION_COLOR_SWITCHES;
   whiteMissionColorSwaps++;
-  if (whiteMissionColorSwaps < WHITE_MISSION_COLOR_SWITCHES) return;
+  if (whiteMissionColorSwaps < requiredColorSwaps) return;
 
+  if (missionUnlocked.white) {
+    triggerMissionProgressComplete('#f7f6ef');
+  } else {
+    completeMission('white');
+  }
   saintRing = true;
-  completeMission('white');
+  whiteMissionColorSwaps = 0;
   effects.push({
     x: carX,
     y: carDims().carY,
@@ -2062,6 +2084,15 @@ function missionProgressState() {
     return {
       progress: activeWorld === 'white'
         ? clamp01(whiteMissionColorSwaps / WHITE_MISSION_COLOR_SWITCHES)
+        : 0,
+      fill: '#f7f6ef'
+    };
+  }
+
+  if (!saintRing && !dreamHighway) {
+    return {
+      progress: activeWorld === 'white'
+        ? clamp01(whiteMissionColorSwaps / SAINT_RING_RECHARGE_COLOR_SWITCHES)
         : 0,
       fill: '#f7f6ef'
     };

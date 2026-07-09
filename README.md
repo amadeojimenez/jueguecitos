@@ -13,7 +13,7 @@ Purple: darker cosmic-style world.
 Portals appear after the color feature unlocks. To enter a portal, the car’s selected color must match the portal color. If the color does not match, the portal collapses and the player stays in the current world.
 Mission Chain
 Blue Mission: Reach 200 score. This unlocks color switching and portals.
-White Mission: Enter the white world, then switch car colors 50 times while staying in white. Leaving white resets the progress. Completing this grants the saint ring.
+White Mission: Enter the white world, then switch car colors 50 times while staying in white. Leaving white resets the progress. Completing this grants the saint ring. If the ring later breaks, return to the white world and switch colors 15 times to restore it.
 Purple Mission: With the saint ring active, enter the purple world and collect 20 coins. Completing this unlocks the next dimension mission.
 Dimension Wanderer: Cross portals in this exact sequence: blue -> white -> purple -> white -> blue. Correct portals advance progress; wrong portals reset or partially restart the sequence.
 Dream Highway / Space Mode: After Dimension Wanderer is complete, black portals can spawn. Entering one starts the dream highway: lane movement is replaced by free horizontal steering, coin paths curve across the screen, and UFOs become the main hazard.
