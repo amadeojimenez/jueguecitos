@@ -53,7 +53,7 @@
 const canvas = document.getElementById('gameCanvas');
 const ctx    = canvas.getContext('2d');
 // increase this version in any change in the code
-const GAME_VERSION = 'v0.5.31';
+const GAME_VERSION = 'v0.5.32';
 let touchGestureActive = false;
 let resizeQueuedAfterTouch = false;
 
@@ -127,14 +127,19 @@ if (!CanvasRenderingContext2D.prototype.roundRect) {
 }
 
 // ─── Road Metrics ───────────────────────────────────────────────────────────
-const GRASS_FRAC = 0.10; // fraction of canvas width for each grass strip
+const GRASS_FRAC = 0.10; // fraction of canvas width for each grass strip at full road width
+// Tweak these values to adjust the game's apparent size. 0.75 = three quarters.
+const ROAD_ZOOM_SCALE = 0.75;
+const OBSTACLE_SIZE_SCALE = 0.75;
+const BASIC_COIN_SIZE_SCALE = 0.75;
 
 function roadMetrics() {
   const W = canvas.width, H = canvas.height;
-  const grassW   = W * GRASS_FRAC;
-  const roadL    = grassW;
-  const roadR    = W - grassW;
-  const roadW    = roadR - roadL;
+  const fullRoadW = W * (1 - GRASS_FRAC * 2);
+  const roadW    = fullRoadW * ROAD_ZOOM_SCALE;
+  const roadL    = (W - roadW) / 2;
+  const roadR    = roadL + roadW;
+  const grassW   = roadL;
   const laneW    = roadW / 2;
   const centerX  = roadL + roadW / 2;
   const lane0    = roadL + laneW / 2;        // left lane x-center
@@ -841,7 +846,8 @@ function maybeSpawnSpecialCoinBetweenObstacles(nextObstacle) {
     x: nextObstacle.x,
     y: (lastRoadSpawnObstacle.y + nextObstacle.y) / 2,
     type: 'collect',
-    size: nextObstacle.size,
+    // Special coins retain their normal relative size; road zoom still applies.
+    size: roadMetrics().laneW * 0.32,
     lane: nextObstacle.lane,
     special: true
   });
@@ -856,7 +862,8 @@ function spawnObject() {
 
   let lane = Math.random() < 0.5 ? 0 : 1;
   const type = Math.random() < COIN_SPAWN_PROBABILITY ? 'collect' : 'obstacle';
-  const size = r.laneW * 0.32;
+  const baseSize = r.laneW * 0.32;
+  const size = baseSize * (type === 'obstacle' ? OBSTACLE_SIZE_SCALE : BASIC_COIN_SIZE_SCALE);
   const y = -size * 1.2;
 
   if (type === 'obstacle') {
@@ -2297,7 +2304,8 @@ function drawMissionProgressBar() {
 // ─── Overlay Screens ─────────────────────────────────────────────────────────
 
 function drawPresentationHelpButton(mainBounds, r) {
-  const radius = Math.max(13, Math.min(20, r.W * 0.045));
+  // Keep the help affordance comfortably tappable on narrow phone screens.
+  const radius = Math.max(24, Math.min(28, r.W * 0.065));
   const cx = mainBounds.x + mainBounds.w - radius * 1.45;
   const cy = mainBounds.y + radius * 1.45;
   presentationButtonBounds = {
