@@ -53,7 +53,7 @@
 const canvas = document.getElementById('gameCanvas');
 const ctx    = canvas.getContext('2d');
 // increase this version in any change in the code
-const GAME_VERSION = 'v0.5.32';
+const GAME_VERSION = 'v0.5.33';
 let touchGestureActive = false;
 let resizeQueuedAfterTouch = false;
 
@@ -198,7 +198,7 @@ const COIN_SPAWN_PROBABILITY = 0.28;
 const MAX_SAME_LANE_OBSTACLES = 3;
 const REFERENCE_CANVAS_WIDTH = 360; // Samsung Galaxy S24 CSS px at the game's 9:16 fit
 const REFERENCE_LANE_WIDTH = REFERENCE_CANVAS_WIDTH * (1 - GRASS_FRAC * 2) / 2;
-const INITIAL_SPEED      = 6.0;
+const INITIAL_SPEED      = 10.0;
 const INITIAL_SPAWN_DISTANCE = 336;
 const SPAWN_DISTANCE_REDUCTION = 20;
 const MIN_SPAWN_DISTANCE = 250;
@@ -1974,9 +1974,56 @@ function drawScoreCounter() {
   ctx.restore();
 }
 
+function drawSpeedCounter() {
+  const theme = currentTheme();
+  const fontFamily = '"Arial Black", "Trebuchet MS", Arial, sans-serif';
+  const labelSize = Math.max(7, canvas.height * 0.012);
+  const valueSize = Math.max(11, canvas.height * 0.020);
+  const padX = Math.max(8, canvas.width * 0.023);
+  const pillX = canvas.width * 0.024;
+  const pillY = canvas.height * 0.071;
+  const pillH = Math.max(25, canvas.height * 0.044);
+  const displaySpeed = speed / gameplayScale();
+  const value = displaySpeed.toFixed(1);
+
+  ctx.save();
+  ctx.font = `900 ${valueSize}px ${fontFamily}`;
+  const valueW = ctx.measureText(value).width;
+  ctx.font = `800 ${labelSize}px "Trebuchet MS", Arial, sans-serif`;
+  const labelW = ctx.measureText('SPEED').width;
+  const pillW = Math.max(canvas.width * 0.135, Math.max(valueW, labelW) + padX * 2);
+
+  ctx.shadowColor = 'rgba(0,0,0,0.34)';
+  ctx.shadowBlur = canvas.width * 0.018;
+  ctx.shadowOffsetY = 1.5;
+  ctx.fillStyle = theme.hudPanel;
+  ctx.beginPath();
+  ctx.roundRect(pillX, pillY, pillW, pillH, pillH * 0.38);
+  ctx.fill();
+
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetY = 0;
+  ctx.strokeStyle = 'rgba(255,255,255,0.13)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.roundRect(pillX, pillY, pillW, pillH, pillH * 0.38);
+  ctx.stroke();
+
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = 'rgba(255,255,255,0.58)';
+  ctx.font = `800 ${labelSize}px "Trebuchet MS", Arial, sans-serif`;
+  ctx.fillText('SPEED', pillX + pillW / 2, pillY + pillH * 0.30);
+  ctx.fillStyle = theme.hudAccent;
+  ctx.font = `900 ${valueSize}px ${fontFamily}`;
+  ctx.fillText(value, pillX + pillW / 2, pillY + pillH * 0.69);
+  ctx.restore();
+}
+
 function drawHUD() {
   drawMissionProgressBar();
   drawScoreCounter();
+  drawSpeedCounter();
 
   drawColorStatus();
   drawSaintRingStatus();
