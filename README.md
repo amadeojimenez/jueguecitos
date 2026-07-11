@@ -2,7 +2,7 @@
 
 Here’s the current game summary:
 Core Dynamic
-Lane Dodger is a portrait, top-down arcade racing game. The player drives in two lanes, dodging red obstacles and collecting coins while the road scrolls faster over time. Normal coins give +10, special coins give +50, portals give +50, and survival adds passive score every half-second. Speed ramps every few seconds and also increases slightly when coins are collected.
+Lane Dodger is a portrait, top-down arcade racing game. The player drives in two lanes, dodging red obstacles and collecting coins while the road scrolls faster over time. Normal coins give +10, special coins give +50, successful portal crossings give +100, and survival adds passive score every half-second. Speed ramps every few seconds; coins do not affect speed.
 Controls
 Tap/click the left or right side to move lanes. After color switching unlocks, tapping the current lane or pressing Space cycles the car color. Arrow keys also work.
 Worlds

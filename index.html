@@ -158,7 +158,7 @@ let objects;          // [{ x, y, type, size, lane, color, seed }]
 let effects;          // [{ x, y, type, size, color, seed, age, duration }]
 let roadOffset;
 let scoreTimer, spawnTimer, spawnInterval, diffTimer;
-let speedRampBonus, coinSpeedBonus, specialCoinSpeedBonus, nextSpeedReductionScore;
+let speedRampBonus, nextSpeedReductionScore;
 let portalTimer, portalInterval;
 let nightTimer, nightInterval, nightPhaseTimer, nightPhase;
 let purpleFlipTimer, purpleFlipInterval, purpleFlipPhaseTimer, purpleFlipPhase;
@@ -198,15 +198,13 @@ const COIN_SPAWN_PROBABILITY = 0.28;
 const MAX_SAME_LANE_OBSTACLES = 3;
 const REFERENCE_CANVAS_WIDTH = 360; // Samsung Galaxy S24 CSS px at the game's 9:16 fit
 const REFERENCE_LANE_WIDTH = REFERENCE_CANVAS_WIDTH * (1 - GRASS_FRAC * 2) / 2;
-const INITIAL_SPEED      = 5.2;
+const INITIAL_SPEED      = 6.0;
 const INITIAL_SPAWN_DISTANCE = 336;
 const SPAWN_DISTANCE_REDUCTION = 20;
 const MIN_SPAWN_DISTANCE = 250;
 const SPEED_RAMP_BONUS   = 0.115;
 const COIN_SCORE = 10;
-const COIN_SPEED_BONUS   = 0.10;
 const SPECIAL_COIN_SCORE = 50;
-const SPECIAL_COIN_SPEED_BONUS = 0.51;
 const SPEED_REDUCTION_INTERVAL_SCORE = 300;
 const SPEED_REDUCTION_MULTIPLIER = 2 / 3;
 const SPECIAL_COIN_PROBABILITY = 0.2;
@@ -221,7 +219,7 @@ const devWorld = devMode && COLOR_ORDER.includes(requestedDevWorld) ? requestedD
 const devSpace = devMode && requestedDevWorld === 'space';
 const PORTAL_MIN_INTERVAL = 120;
 const PORTAL_MAX_INTERVAL = 420;
-const PORTAL_SCORE_BONUS = 50;
+const PORTAL_SCORE_BONUS = 100;
 const NIGHT_MIN_INTERVAL = 200 ;
 const NIGHT_MAX_INTERVAL = 700;
 const DEV_NIGHT_MIN_INTERVAL = 120;
@@ -353,8 +351,6 @@ function initGame() {
   spawnTimer = 0;
   spawnInterval = scaledGameplayValue(INITIAL_SPAWN_DISTANCE);
   speedRampBonus = scaledGameplayValue(SPEED_RAMP_BONUS);
-  coinSpeedBonus = scaledGameplayValue(COIN_SPEED_BONUS);
-  specialCoinSpeedBonus = scaledGameplayValue(SPECIAL_COIN_SPEED_BONUS);
   nextSpeedReductionScore = SPEED_REDUCTION_INTERVAL_SCORE;
   diffTimer  = 0;
   portalTimer = 0;
@@ -446,8 +442,6 @@ function setActiveWorld(world) {
 
 function reduceVelocityIncrements() {
   speedRampBonus *= SPEED_REDUCTION_MULTIPLIER;
-  coinSpeedBonus *= SPEED_REDUCTION_MULTIPLIER;
-  specialCoinSpeedBonus *= SPEED_REDUCTION_MULTIPLIER;
 }
 
 function updateVelocityIncrementMilestones() {
@@ -744,14 +738,6 @@ function isSpecialCoin() {
   return Math.random() < SPECIAL_COIN_PROBABILITY;
 }
 
-function scoreRampSpeedForPoints(points) {
-  return (points / 10) * speedRampBonus;
-}
-
-function coinVelocityBonus(obj) {
-  return obj.special ? specialCoinSpeedBonus : coinSpeedBonus;
-}
-
 function collectCoin(obj) {
   effects.push({
     x: obj.x,
@@ -765,8 +751,6 @@ function collectCoin(obj) {
   const coinScore = obj.special ? SPECIAL_COIN_SCORE : COIN_SCORE;
   addScore(coinScore);
   registerCollectedCoin();
-  // Coin bonuses stay below the speed earned by advancing the same score amount.
-  speed = Math.min(speed + Math.min(coinVelocityBonus(obj), scoreRampSpeedForPoints(coinScore)), maxSpeed());
 }
 
 function collapsePortal(portal) {
@@ -1009,6 +993,7 @@ function update() {
         if (objects[i].color === 'black') {
           collapsePortal(objects[i]);
           objects.splice(i, 1);
+          addScore(PORTAL_SCORE_BONUS);
           startDreamHighway();
           return;
         }
